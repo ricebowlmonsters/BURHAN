@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zona Cacing - Monster Bowl Mania</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: 'Inter', sans-serif;
+        }
+        #gameCanvas {
+            display: block;
+            background: #1a1a2e;
+        }
+        .status-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.95);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            color: white;
+        }
+        .status-overlay.hidden {
+            display: none;
+        }
+        .distance-indicator {
+            font-size: 2rem;
+            font-weight: bold;
+            margin: 1rem 0;
+        }
+        .distance-ok {
+            color: #10b981;
+        }
+        .distance-far {
+            color: #ef4444;
+        }
+        #playersCount {
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <!-- Status Overlay -->
+    <div id="statusOverlay" class="status-overlay">
+        <div class="text-center">
+            <div class="text-3xl font-bold mb-4">🎮 Zona Cacing</div>
+            <div id="statusText" class="text-xl mb-4">Mengecek lokasi...</div>
+            <div id="distanceText" class="distance-indicator"></div>
+            <div id="errorText" class="text-red-500 mt-4 hidden max-w-md text-center px-4"></div>
+        </div>
+    </div>
+
+    <!-- Game Canvas -->
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- Game UI -->
+    <div id="gameUI" class="hidden fixed top-4 left-4 bg-black bg-opacity-50 text-white p-4 rounded-lg">
+        <div class="text-sm">Skor: <span id="scoreDisplay">0</span></div>
+        <div class="text-sm">Pemain: <span id="playersCount">0</span></div>
+    </div>
+
+    <!-- Firebase v11+ Modular SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, collection, doc, 
+            setDoc, updateDoc, deleteDoc, 
+            onSnapshot, serverTimestamp, writeBatch, setLogLevel 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // ========== CONFIGURATION ==========
+        // TARGET LOCATION (Edit these values)
+        const TARGET_LATITUDE = -7.4227543;
+        const TARGET_LONGITUDE = 112.6556212;
+        const GEO_FENCE_RADIUS = 3000; // 3000 meters. Perbaikan: Menghapus teks error sintaksis.
+
+        // ========== FIREBASE CONFIGURATION (Wajib dari Global) ==========
+        // Konfigurasi ini DITARIK DARI VARIABEL GLOBAL yang disediakan oleh lingkungan Canvas
+        // JANGAN MENGISI SECARA MANUAL DI SINI
+        
+        let firebaseConfig, appId, initialAuthToken;
+
+        try {
+            firebaseConfig = (typeof __firebase_config !== 'undefined' && __firebase_config)
+                ? (typeof __firebase_config === 'string' ? JSON.parse(__firebase_config) : __firebase_config)
+                : null;
+            
+            appId = (typeof __app_id !== 'undefined' && __app_id)
+                ? __app_id
+                : 'default-app-id';
+            
+            initialAuthToken = (typeof __initial_auth_token !== 'undefined' && __initial_auth_token)
+                ? __initial_auth_token
+                : null;
+
+            if (!firebaseConfig || Object.keys(firebaseConfig).length < 5) {
+                throw new Error("Konfigurasi Firebase global tidak ditemukan atau tidak valid.");
+            }
+            
+        } catch (e) {
+            console.error('Error parsing Firebase config from global variables:', e);
+            // Tampilkan error di overlay jika konfigurasi gagal
+            const errorElement = document.getElementById('errorText');
+            errorElement.innerHTML = 'Error Kritis: Konfigurasi Firebase tidak valid. <br>' + e.message;
+            errorElement.classList.remove('hidden');
+        }
+
+        // ========== GLOBAL VARIABLES ==========
+        let canvas, ctx;
+        let gameStarted = false;
+        let locationWatchId = null;
+        let currentDistance = Infinity;
+        let userId = null;
+        
+        let app, auth, db; // Instance Firebase (modular)
+
+        let playerDocRef = null; // Referensi ke dokumen pemain
+        let playersListener = null; // Unsubscriber untuk listener pemain
+        let foodListener = null; // Unsubscriber untuk listener makanan
+        let updateInterval = null;
+        let lastUpdateTime = 0;
+        let lastFullBodyUpdateTime = 0;
+
+        // Game state
+        let myPlayer = {
+            head: { x: 0, y: 0 },
+            body: [],
+            angle: 0,
+            score: 0,
+            name: 'Player ' + Math.floor(Math.random() * 1000), // Nama acak
+            color: '#ff6b6b',
+            velocity: { x: 0, y: 0 }
+        };
+
+        let otherPlayers = new Map();
+        let foodItems = new Map();
+        let keys = {};
+
+        // ========== INITIALIZATION ==========
+        window.addEventListener('DOMContentLoaded', () => {
+            canvas = document.getElementById('gameCanvas');
+            ctx = canvas.getContext('2d');
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+
+            // Initialize geofencing
+            startGeofencing();
+
+            // Keyboard controls
+            document.addEventListener('keydown', handleKeyDown);
+            document.addEventListener('keyup', handleKeyUp);
+            
+            // Touch controls (diperbaiki)
+            document.addEventListener('touchstart', handleTouch);
+            document.addEventListener('touchmove', handleTouch);
+            document.addEventListener('touchend', handleTouchEnd);
+            document.addEventListener('touchcancel', handleTouchEnd);
+        });
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        // ========== GEOFENCING ==========
+        function startGeofencing() {
+            updateStatus('Mengecek lokasi...', '');
+            
+            if (!navigator.geolocation) {
+                showError('Geolokasi tidak didukung oleh browser Anda.');
+                return;
+            }
+
+            const options = {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            };
+
+            locationWatchId = navigator.geolocation.watchPosition(
+                handleLocationSuccess,
+                handleLocationError,
+                options
+            );
+        }
+
+        function handleLocationSuccess(position) {
+            const userLat = position.coords.latitude;
+            const userLon = position.coords.longitude;
+            
+            currentDistance = calculateDistance(
+                TARGET_LATITUDE, TARGET_LONGITUDE,
+                userLat, userLon
+            );
+
+            const distanceText = `${currentDistance.toFixed(1)} m`;
+            document.getElementById('distanceText').textContent = distanceText;
+
+            if (currentDistance <= GEO_FENCE_RADIUS) {
+                document.getElementById('distanceText').className = 'distance-indicator distance-ok';
+                updateStatus('Lokasi terverifikasi!', distanceText);
+                
+                if (!gameStarted) {
+                    initializeGame(); // Hapus timeout agar game lebih cepat dimulai
+                }
+            } else {
+                document.getElementById('distanceText').className = 'distance-indicator distance-far';
+                // Pesan error lebih jelas
+                updateStatus(`Anda terlalu jauh (${distanceText}). Harap bermain di lokasi (radius ${GEO_FENCE_RADIUS}m).`, distanceText);
+                
+                if (gameStarted) {
+                    stopGame();
+                }
+            }
+        }
+
+        function handleLocationError(error) {
+            let errorMsg = 'Error mendapatkan lokasi: ';
+            switch(error.code) {
+                case error.PERMISSION_DENIED:
+                    errorMsg = 'Akses lokasi ditolak. Game memerlukan izin lokasi.';
+                    break;
+                case error.POSITION_UNAVAILABLE:
+                    errorMsg = 'Informasi lokasi tidak tersedia.';
+                    break;
+                case error.TIMEOUT:
+                    errorMsg = 'Waktu permintaan lokasi habis.';
+                    break;
+                default:
+                    errorMsg += error.message;
+            }
+            showError(errorMsg);
+        }
+
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371000; // Earth radius in meters
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = 
+                Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        }
+
+        function updateStatus(status, distance) {
+            document.getElementById('statusText').textContent = status;
+        }
+
+        function showError(errorMsg) {
+            const errorElement = document.getElementById('errorText');
+            // Support HTML for better formatting
+            if (errorMsg.includes('\n') || errorMsg.includes('<br>')) {
+                errorElement.innerHTML = errorMsg.replace(/\n/g, '<br>');
+            } else {
+                errorElement.textContent = errorMsg;
+            }
+            errorElement.classList.remove('hidden');
+        }
+
+        // ========== GAME INITIALIZATION ==========
+        async function initializeGame() {
+            try {
+                console.log('Initializing game...');
+                
+                // Cek jika Firebase config gagal dimuat
+                if (!firebaseConfig) {
+                    showError('Konfigurasi Firebase tidak ditemukan atau tidak valid.<br>' +
+                              'Pastikan variabel global __firebase_config tersedia.');
+                    return; // Hentikan inisialisasi
+                }
+
+                // Initialize Firebase (Modular)
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                setLogLevel('Debug'); // Aktifkan logging debug Firestore
+                
+                console.log('Firebase initialized.');
+
+                // Authenticate user
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                    console.log('Signed in with custom token.');
+                } else {
+                    await signInAnonymously(auth);
+                    console.log('Signed in anonymously.');
+                }
+
+                userId = auth.currentUser.uid;
+                console.log('User authenticated:', userId);
+
+                // Tetapkan referensi dokumen pemain (PENTING: gunakan path baru)
+                playerDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'monster-bowl-players', userId);
+
+                // Initialize player position (center of canvas)
+                myPlayer.head.x = canvas.width / 2;
+                myPlayer.head.y = canvas.height / 2;
+                myPlayer.color = generateRandomColor();
+
+                // Create initial body segments
+                for (let i = 0; i < 5; i++) {
+                    myPlayer.body.push({
+                        x: myPlayer.head.x - i * 10,
+                        y: myPlayer.head.y
+                    });
+                }
+
+                // Join game
+                await joinGame();
+                console.log('Player joined game in Firestore.');
+
+                // Start game loop
+                gameStarted = true;
+                document.getElementById('statusOverlay').classList.add('hidden');
+                document.getElementById('gameUI').classList.remove('hidden');
+                
+                startGameLoop();
+                startListeners();
+                console.log('Game loop and listeners started. Game UI should be visible.');
+
+            } catch (error) {
+                console.error('Error initializing game:', error);
+                showError('Error memulai game: ' + error.message);
+            }
+        }
+
+        async function joinGame() {
+            const playerDocData = {
+                head: { x: myPlayer.head.x, y: myPlayer.head.y },
+                body: myPlayer.body,
+                angle: myPlayer.angle,
+                score: myPlayer.score,
+                name: myPlayer.name,
+                color: myPlayer.color,
+                lastSeen: serverTimestamp() // Modular
+            };
+            console.log("PlayerDoc data:", playerDocData); // Debugging
+
+            await setDoc(playerDocRef, playerDocData, { merge: true });
+        }
+
+        function startListeners() {
+            // Gunakan path koleksi yang benar
+            const playersRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster-bowl-players');
+            const foodRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster-bowl-food');
+
+            // Listen to players (Modular)
+            playersListener = onSnapshot(playersRef, (snapshot) => {
+                snapshot.docChanges().forEach((change) => {
+                    const playerId = change.doc.id;
+                    const playerData = change.doc.data();
+                    
+                    if (playerId === userId) return;
+
+                    if (change.type === 'added' || change.type === 'modified') {
+                        // Cek jika data pemain valid
+                        if (playerData && playerData.head && playerData.body) {
+                            otherPlayers.set(playerId, playerData);
+                        }
+                    } else if (change.type === 'removed') {
+                        otherPlayers.delete(playerId);
+                    }
+                });
+
+                // Clean up offline players
+                const now = Date.now();
+                otherPlayers.forEach((player, playerId) => {
+                    if (player.lastSeen && player.lastSeen.toMillis) {
+                        const lastSeen = player.lastSeen.toMillis();
+                        if (now - lastSeen > 15000) { // Hapus pemain setelah 15 detik tidak aktif
+                            otherPlayers.delete(playerId);
+                        }
+                    } else {
+                        // Hapus data tidak valid
+                        otherPlayers.delete(playerId);
+                    }
+                });
+
+                updatePlayersCount();
+            }, (error) => {
+                console.error("Error listening to players:", error);
+            });
+
+            // Listen to food (Modular)
+            foodListener = onSnapshot(foodRef, (snapshot) => {
+                snapshot.docChanges().forEach((change) => {
+                    const foodId = change.doc.id;
+                    const foodData = change.doc.data();
+
+                    if (change.type === 'added' || change.type === 'modified') {
+                        foodItems.set(foodId, foodData);
+                    } else if (change.type === 'removed') {
+                        foodItems.delete(foodId);
+                    }
+                });
+            }, (error) => {
+                console.error("Error listening to food:", error);
+            });
+        }
+
+        function startGameLoop() {
+            const targetFPS = 20;
+            const interval = 1000 / targetFPS;
+            lastUpdateTime = Date.now();
+
+            updateInterval = setInterval(() => {
+                updateGame();
+                render();
+            }, interval);
+        }
+
+        // ========== GAME LOGIC ==========
+        function updateGame() {
+            if (!gameStarted) return;
+
+            // Update angle based on input
+            if (keys['ArrowUp'] || keys['w'] || keys['W']) {
+                myPlayer.angle = -Math.PI / 2;
+            } else if (keys['ArrowDown'] || keys['s'] || keys['S']) {
+                myPlayer.angle = Math.PI / 2;
+            } else if (keys['ArrowLeft'] || keys['a'] || keys['A']) {
+                myPlayer.angle = Math.PI;
+            } else if (keys['ArrowRight'] || keys['d'] || keys['D']) {
+                myPlayer.angle = 0;
+            }
+
+            // Calculate velocity
+            const speed = 5;
+            myPlayer.velocity.x = Math.cos(myPlayer.angle) * speed;
+            myPlayer.velocity.y = Math.sin(myPlayer.angle) * speed;
+
+            // Update head position
+            myPlayer.head.x += myPlayer.velocity.x;
+            myPlayer.head.y += myPlayer.velocity.y;
+
+            // Wrap around screen
+            if (myPlayer.head.x < 0) myPlayer.head.x = canvas.width;
+            if (myPlayer.head.x > canvas.width) myPlayer.head.x = 0;
+            if (myPlayer.head.y < 0) myPlayer.head.y = canvas.height;
+            if (myPlayer.head.y > canvas.height) myPlayer.head.y = 0;
+
+            // Update body
+            myPlayer.body.unshift({ x: myPlayer.head.x, y: myPlayer.head.y });
+            myPlayer.body.pop();
+
+            // Check food collision
+            checkFoodCollision();
+
+            // Check collision with self
+            if (checkSelfCollision()) {
+                handleDeath();
+                return;
+            }
+
+            // Check collision with other players
+            if (checkOtherPlayersCollision()) {
+                handleDeath();
+                return;
+            }
+
+            // Update Firestore
+            updateFirestorePosition();
+        }
+
+        function checkFoodCollision() {
+            const headRadius = 10;
+            // Gunakan path koleksi yang benar
+            const foodRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster-bowl-food');
+
+            foodItems.forEach((food, foodId) => {
+                const dx = myPlayer.head.x - food.x;
+                const dy = myPlayer.head.y - food.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < headRadius + 5) {
+                    // Eat food
+                    myPlayer.score += food.value || 1;
+                    myPlayer.body.push({
+                        x: myPlayer.body[myPlayer.body.length - 1].x,
+                        y: myPlayer.body[myPlayer.body.length - 1].y
+                    });
+
+                    // Remove food from Firestore (Modular)
+                    const foodDocRef = doc(foodRef, foodId);
+                    deleteDoc(foodDocRef).catch(console.error);
+                }
+            });
+        }
+
+        function checkSelfCollision() {
+            if (myPlayer.body.length < 10) return false;
+
+            const headRadius = 10;
+            for (let i = 10; i < myPlayer.body.length; i++) {
+                const segment = myPlayer.body[i];
+                const dx = myPlayer.head.x - segment.x;
+                const dy = myPlayer.head.y - segment.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < headRadius * 2) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function checkOtherPlayersCollision() {
+            const headRadius = 10;
+
+            // PERBAIKAN: Menggunakan loop for...of agar 'return true' berfungsi
+            for (const player of otherPlayers.values()) {
+                if (player.body && Array.isArray(player.body)) {
+                    for (let i = 0; i < player.body.length; i++) {
+                        const segment = player.body[i];
+                        const dx = myPlayer.head.x - segment.x;
+                        const dy = myPlayer.head.y - segment.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+
+                        if (distance < headRadius * 2) {
+                            return true; // Ini akan menghentikan fungsi
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        async function handleDeath() {
+            // Drop food along body
+            // Gunakan path koleksi yang benar
+            const foodRef = collection(db, 'artifacts', appId, 'public', 'data', 'monster-bowl-food');
+            const batch = writeBatch(db); // Modular
+
+            const foodEmojis = ['🥩', '🍗', '🥓', '🍖'];
+            const segmentsPerFood = 5;
+
+            for (let i = 0; i < myPlayer.body.length; i += segmentsPerFood) {
+                const segment = myPlayer.body[i];
+                const newFoodDocRef = doc(foodRef); // Buat referensi dokumen baru
+                const foodDoc = {
+                    x: segment.x,
+                    y: segment.y,
+                    emoji: foodEmojis[Math.floor(Math.random() * foodEmojis.length)],
+                    value: Math.max(5, Math.floor(myPlayer.score / 10)),
+                    timestamp: serverTimestamp() // Modular
+                };
+                batch.set(newFoodDocRef, foodDoc);
+            }
+
+            await batch.commit();
+
+            // Remove player (gunakan referensi yang sudah ada)
+            await deleteDoc(playerDocRef);
+
+            // Reset player
+            myPlayer.head.x = canvas.width / 2;
+            myPlayer.head.y = canvas.height / 2;
+            myPlayer.body = [];
+            myPlayer.score = 0;
+            myPlayer.angle = 0;
+
+            for (let i = 0; i < 5; i++) {
+                myPlayer.body.push({
+                    x: myPlayer.head.x - i * 10,
+                    y: myPlayer.head.y
+                });
+            }
+
+            // Rejoin
+            await joinGame();
+        }
+
+        function updateFirestorePosition() {
+            const now = Date.now();
+            if (now - lastUpdateTime < 100) return; // Throttle to ~10fps
+            lastUpdateTime = now;
+
+            const shouldSendFullBody = now - lastFullBodyUpdateTime > 2000; // Kirim body lengkap setiap 2 detik
+
+            const updateData = {
+                head: { x: myPlayer.head.x, y: myPlayer.head.y },
+                angle: myPlayer.angle,
+                score: myPlayer.score,
+                lastSeen: serverTimestamp() // Modular
+            };
+
+            if (shouldSendFullBody) {
+                updateData.body = myPlayer.body;
+                lastFullBodyUpdateTime = now;
+            }
+
+            // Gunakan referensi yang sudah ada
+            updateDoc(playerDocRef, updateData).catch(error => {
+                console.error("Error updating Firestore:", error);
+            });
+        }
+
+        // ========== RENDERING ==========
+        function render() {
+            // Clear canvas
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw grid
+            drawGrid();
+
+            // Draw food
+            foodItems.forEach((food) => {
+                drawFood(food);
+            });
+
+            // Draw other players
+            otherPlayers.forEach((player) => {
+                drawPlayer(player, false);
+            });
+
+            // Draw my player (on top)
+            drawPlayer(myPlayer, true);
+
+            // Update UI
+            document.getElementById('scoreDisplay').textContent = myPlayer.score;
+        }
+
+        function drawGrid() {
+            ctx.strokeStyle = '#2a2a3e';
+            ctx.lineWidth = 1;
+
+            const gridSize = 50;
+            for (let x = 0; x < canvas.width; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+
+            for (let y = 0; y < canvas.height; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+        }
+
+        function drawPlayer(player, isMyPlayer) {
+            if (!player.body || player.body.length === 0) return;
+
+            ctx.fillStyle = player.color || '#ff6b6b';
+            ctx.strokeStyle = isMyPlayer ? '#fff' : '#333';
+            ctx.lineWidth = 2;
+
+            // Draw body
+            player.body.forEach((segment, index) => {
+                ctx.beginPath();
+                ctx.arc(segment.x, segment.y, 10, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+            });
+
+            // Draw head (larger)
+            const head = player.head || player.body[0];
+            ctx.beginPath();
+            ctx.arc(head.x, head.y, 12, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+
+            // Draw eyes
+            if (isMyPlayer) {
+                ctx.fillStyle = '#fff';
+                const angle = player.angle || 0;
+                const eyeOffset = 5;
+                ctx.beginPath();
+                ctx.arc(head.x + Math.cos(angle) * eyeOffset, head.y + Math.sin(angle) * eyeOffset, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function drawFood(food) {
+            ctx.font = '20px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(food.emoji || '🍎', food.x, food.y);
+        }
+
+        // ========== INPUT HANDLING ==========
+        function handleKeyDown(e) {
+            keys[e.key] = true;
+
+            const gameKeys = [
+                'ArrowUp', 'w', 'W',
+                'ArrowDown', 's', 'S',
+                'ArrowLeft', 'a', 'A',
+                'ArrowRight', 'd', 'D'
+            ];
+
+            if (gameKeys.includes(e.key)) {
+                e.preventDefault();
+            }
+        }
+
+        function handleKeyUp(e) {
+            keys[e.key] = false;
+        }
+
+        function handleTouch(e) {
+            e.preventDefault();
+            if (e.touches.length > 0) {
+                const touch = e.touches[0];
+                const centerX = canvas.width / 2;
+                const centerY = canvas.height / 2;
+                const dx = touch.clientX - centerX;
+                const dy = touch.clientY - centerY;
+
+                // Reset semua kunci
+                keys['ArrowUp'] = false;
+                keys['ArrowDown'] = false;
+                keys['ArrowLeft'] = false;
+                keys['ArrowRight'] = false;
+
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    // Gerakan horizontal
+                    if (dx > 0) keys['ArrowRight'] = true;
+                    else keys['ArrowLeft'] = true;
+                } else {
+                    // Gerakan vertikal
+                    if (dy > 0) keys['ArrowDown'] = true;
+                    else keys['ArrowUp'] = true;
+                }
+            }
+        }
+
+        function handleTouchEnd(e) {
+            // Hentikan gerakan jika tidak ada jari yang menyentuh layar
+            if (e.touches.length === 0) {
+                keys['ArrowUp'] = false;
+                keys['ArrowDown'] = false;
+                keys['ArrowLeft'] = false;
+                keys['ArrowRight'] = false;
+            }
+        }
+
+        function updatePlayersCount() {
+            document.getElementById('playersCount').textContent = otherPlayers.size + 1;
+        }
+
+        // ========== CLEANUP ==========
+        function stopGame() {
+            gameStarted = false;
+
+            if (updateInterval) {
+                clearInterval(updateInterval);
+                updateInterval = null;
+            }
+
+            if (playersListener) {
+                playersListener(); // Unsubscribe
+                playersListener = null;
+            }
+
+            if (foodListener) {
+                foodListener(); // Unsubscribe
+                foodListener = null;
+            }
+
+            // Hapus pemain dari DB saat keluar dari area
+            if (db && playerDocRef) {
+                deleteDoc(playerDocRef)
+                    .catch(console.error);
+            }
+
+            document.getElementById('statusOverlay').classList.remove('hidden');
+            document.getElementById('gameUI').classList.add('hidden');
+        }
+
+        function generateRandomColor() {
+            const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#f7b731', '#5f27cd', '#00d2d3', '#ff6348', '#a55eea'];
+            return colors[Math.floor(Math.random() * colors.length)];
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (locationWatchId !== null) {
+                navigator.geolocation.clearWatch(locationWatchId);
+            }
+            stopGame(); // Ini akan mencoba menghapus dokumen pemain
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Monster Catcher AR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #statusOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.95);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            color: white;
+        }
+
+        #statusOverlay.hidden {
+            display: none;
+        }
+
+        #cameraContainer {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        #cameraVideo {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #gameContainer {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        .monster {
+            position: absolute;
+            font-size: 60px;
+            pointer-events: auto;
+            cursor: pointer;
+            user-select: none;
+            animation: float 3s ease-in-out infinite;
+            transition: transform 0.3s ease, opacity 0.3s ease;
+        }
+
+        .monster.catching {
+            transform: scale(0) rotate(360deg);
+            opacity: 0;
+        }
+
+        @keyframes float {
+            0%, 100% {
+                transform: translateY(0px) rotate(0deg);
+            }
+            25% {
+                transform: translateY(-20px) rotate(5deg);
+            }
+            50% {
+                transform: translateY(-40px) rotate(0deg);
+            }
+            75% {
+                transform: translateY(-20px) rotate(-5deg);
+            }
+        }
+
+        @keyframes catchAnimation {
+            0% {
+                transform: scale(1) rotate(0deg);
+                opacity: 1;
+            }
+            100% {
+                transform: scale(0) rotate(360deg);
+                opacity: 0;
+            }
+        }
+
+        #collectionUI {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(to top, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.7));
+            padding: 20px;
+            z-index: 10;
+            pointer-events: auto;
+        }
+
+        .collection-item {
+            display: inline-block;
+            margin: 0 10px;
+            padding: 10px 15px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            color: white;
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        .distance-indicator {
+            font-size: 2rem;
+            font-weight: bold;
+            margin: 1rem 0;
+        }
+
+        .distance-ok {
+            color: #10b981;
+        }
+
+        .distance-far {
+            color: #ef4444;
+        }
+
+        .error-text {
+            color: #ef4444;
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Status Overlay -->
+    <div id="statusOverlay" class="status-overlay">
+        <div class="text-center">
+            <div class="text-3xl font-bold mb-4">🎮 Monster Catcher AR</div>
+            <div id="statusText" class="text-xl mb-4">Mengecek lokasi...</div>
+            <div id="distanceText" class="distance-indicator"></div>
+            <div id="errorText" class="error-text hidden"></div>
+        </div>
+    </div>
+
+    <!-- Camera Container -->
+    <div id="cameraContainer" class="hidden">
+        <video id="cameraVideo" autoplay playsinline></video>
+    </div>
+
+    <!-- Game Container -->
+    <div id="gameContainer" class="hidden">
+        <!-- Monsters will be spawned here -->
+    </div>
+
+    <!-- Collection UI -->
+    <div id="collectionUI" class="hidden">
+        <div class="text-center text-white text-lg font-bold mb-2">Koleksi Monster</div>
+        <div id="collectionItems" class="text-center"></div>
+    </div>
+
+    <script>
+        // ========== CONFIGURATION ==========
+        // TARGET LOCATION (Edit these values)
+        const TARGET_LATITUDE = -7.4188025;  // L3 Adventure Store And Rental Outdoor
+        const TARGET_LONGITUDE = 112.6598312; // L3 Adventure Store And Rental Outdoor
+        const GEO_FENCE_RADIUS = 50; // meters
+
+        // Monster types
+        const MONSTER_TYPES = {
+            'ayam': { emoji: '🍗', name: 'Ayam' },
+            'sapi': { emoji: '🥩', name: 'Sapi' },
+            'sayur': { emoji: '🥦', name: 'Sayur' },
+            'telur': { emoji: '🥚', name: 'Telur' },
+            'ikan': { emoji: '🐟', name: 'Ikan' },
+            'keju': { emoji: '🧀', name: 'Keju' }
+        };
+
+        // ========== GLOBAL VARIABLES ==========
+        let locationWatchId = null;
+        let currentDistance = Infinity;
+        let gameStarted = false;
+        let cameraStream = null;
+        let caughtMonsters = {};
+        let activeMonsters = [];
+        let monsterSpawnInterval = null;
+        let monsterIdCounter = 0;
+
+        // ========== INITIALIZATION ==========
+        window.addEventListener('DOMContentLoaded', () => {
+            // Initialize geofencing
+            startGeofencing();
+        });
+
+        // ========== GEOFENCING ==========
+        function startGeofencing() {
+            updateStatus('Mengecek lokasi...', '');
+            
+            if (!navigator.geolocation) {
+                showError('Geolokasi tidak didukung oleh browser Anda.');
+                return;
+            }
+
+            const options = {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            };
+
+            locationWatchId = navigator.geolocation.watchPosition(
+                handleLocationSuccess,
+                handleLocationError,
+                options
+            );
+        }
+
+        function handleLocationSuccess(position) {
+            const userLat = position.coords.latitude;
+            const userLon = position.coords.longitude;
+            
+            currentDistance = calculateDistance(
+                TARGET_LATITUDE, TARGET_LONGITUDE,
+                userLat, userLon
+            );
+
+            const distanceText = `${currentDistance.toFixed(1)} m`;
+            document.getElementById('distanceText').textContent = distanceText;
+
+            if (currentDistance <= GEO_FENCE_RADIUS) {
+                document.getElementById('distanceText').className = 'distance-indicator distance-ok';
+                updateStatus('Lokasi terverifikasi!', distanceText);
+                
+                if (!gameStarted) {
+                    setTimeout(() => {
+                        initializeGame();
+                    }, 1000);
+                }
+            } else {
+                document.getElementById('distanceText').className = 'distance-indicator distance-far';
+                updateStatus('Anda terlalu jauh. Harap bermain di lokasi (radius 50m).', distanceText);
+                
+                if (gameStarted) {
+                    stopGame();
+                }
+            }
+        }
+
+        function handleLocationError(error) {
+            let errorMsg = 'Error mendapatkan lokasi: ';
+            switch(error.code) {
+                case error.PERMISSION_DENIED:
+                    errorMsg = 'Akses lokasi ditolak. Game memerlukan izin lokasi.';
+                    break;
+                case error.POSITION_UNAVAILABLE:
+                    errorMsg = 'Informasi lokasi tidak tersedia.';
+                    break;
+                case error.TIMEOUT:
+                    errorMsg = 'Waktu permintaan lokasi habis.';
+                    break;
+            }
+            showError(errorMsg);
+        }
+
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371000; // Earth radius in meters
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = 
+                Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        }
+
+        function updateStatus(status, distance) {
+            document.getElementById('statusText').textContent = status;
+        }
+
+        function showError(errorMsg) {
+            const errorElement = document.getElementById('errorText');
+            errorElement.textContent = errorMsg;
+            errorElement.classList.remove('hidden');
+        }
+
+        // ========== GAME INITIALIZATION ==========
+        async function initializeGame() {
+            try {
+                // Request camera permission
+                updateStatus('Meminta izin kamera...', '');
+                
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'environment' // Use back camera
+                    }
+                });
+
+                cameraStream = stream;
+                const video = document.getElementById('cameraVideo');
+                video.srcObject = stream;
+                video.play();
+
+                // Wait for video to be ready
+                video.addEventListener('loadedmetadata', () => {
+                    // Start game
+                    gameStarted = true;
+                    document.getElementById('statusOverlay').classList.add('hidden');
+                    document.getElementById('cameraContainer').classList.remove('hidden');
+                    document.getElementById('gameContainer').classList.remove('hidden');
+                    document.getElementById('collectionUI').classList.remove('hidden');
+
+                    // Initialize caught monsters
+                    Object.keys(MONSTER_TYPES).forEach(type => {
+                        caughtMonsters[type] = 0;
+                    });
+
+                    // Start spawning monsters
+                    startSpawningMonsters();
+                    updateCollectionUI();
+                });
+
+            } catch (error) {
+                console.error('Error initializing camera:', error);
+                let errorMsg = 'Error mengakses kamera: ';
+                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    errorMsg = 'Akses kamera ditolak. Game memerlukan izin kamera.';
+                } else if (error.name === 'NotFoundError') {
+                    errorMsg = 'Kamera tidak ditemukan.';
+                } else {
+                    errorMsg += error.message;
+                }
+                showError(errorMsg);
+            }
+        }
+
+        // ========== MONSTER SPAWNING ==========
+        function startSpawningMonsters() {
+            // Spawn first monster immediately
+            spawnMonster();
+
+            // Spawn monsters every 2-4 seconds
+            monsterSpawnInterval = setInterval(() => {
+                if (activeMonsters.length < 10) { // Max 10 monsters on screen
+                    spawnMonster();
+                }
+            }, 2000 + Math.random() * 2000);
+        }
+
+        function spawnMonster() {
+            const gameContainer = document.getElementById('gameContainer');
+            const monsterTypes = Object.keys(MONSTER_TYPES);
+            const randomType = monsterTypes[Math.floor(Math.random() * monsterTypes.length)];
+            const monsterData = MONSTER_TYPES[randomType];
+
+            // Create monster element
+            const monster = document.createElement('div');
+            monster.className = 'monster';
+            monster.id = `monster-${monsterIdCounter++}`;
+            monster.textContent = monsterData.emoji;
+            monster.dataset.type = randomType;
+
+            // Random position (avoid edges)
+            const margin = 50;
+            const x = margin + Math.random() * (window.innerWidth - margin * 2);
+            const y = margin + Math.random() * (window.innerHeight - margin * 2 - 150); // Leave space for UI
+
+            monster.style.left = `${x}px`;
+            monster.style.top = `${y}px`;
+
+            // Random animation delay
+            monster.style.animationDelay = `${Math.random() * 3}s`;
+
+            // Add click handler
+            monster.addEventListener('click', () => catchMonster(monster, randomType));
+            monster.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                catchMonster(monster, randomType);
+            });
+
+            // Add to container
+            gameContainer.appendChild(monster);
+            activeMonsters.push(monster);
+
+            // Auto-remove after 10 seconds if not caught
+            setTimeout(() => {
+                if (monster.parentNode) {
+                    removeMonster(monster);
+                }
+            }, 10000);
+        }
+
+        // ========== MONSTER CATCHING ==========
+        function catchMonster(monster, type) {
+            // Play catch animation
+            monster.classList.add('catching');
+            monster.style.animation = 'catchAnimation 0.5s ease-out forwards';
+
+            // Add to collection
+            if (!caughtMonsters[type]) {
+                caughtMonsters[type] = 0;
+            }
+            caughtMonsters[type]++;
+
+            // Remove monster after animation
+            setTimeout(() => {
+                removeMonster(monster);
+            }, 500);
+
+            // Update UI
+            updateCollectionUI();
+        }
+
+        function removeMonster(monster) {
+            if (monster.parentNode) {
+                monster.parentNode.removeChild(monster);
+            }
+            const index = activeMonsters.indexOf(monster);
+            if (index > -1) {
+                activeMonsters.splice(index, 1);
+            }
+        }
+
+        // ========== UI UPDATES ==========
+        function updateCollectionUI() {
+            const collectionItems = document.getElementById('collectionItems');
+            collectionItems.innerHTML = '';
+
+            Object.keys(caughtMonsters).forEach(type => {
+                const count = caughtMonsters[type];
+                if (count > 0) {
+                    const monsterData = MONSTER_TYPES[type];
+                    const item = document.createElement('div');
+                    item.className = 'collection-item';
+                    item.innerHTML = `${monsterData.emoji} <span class="ml-2">${count}</span>`;
+                    collectionItems.appendChild(item);
+                }
+            });
+
+            // Show message if no monsters caught
+            if (collectionItems.children.length === 0) {
+                collectionItems.innerHTML = '<div class="text-white text-sm opacity-50">Tap monster untuk menangkap!</div>';
+            }
+        }
+
+        // ========== GAME CLEANUP ==========
+        function stopGame() {
+            gameStarted = false;
+
+            // Stop spawning
+            if (monsterSpawnInterval) {
+                clearInterval(monsterSpawnInterval);
+                monsterSpawnInterval = null;
+            }
+
+            // Remove all monsters
+            activeMonsters.forEach(monster => {
+                if (monster.parentNode) {
+                    monster.parentNode.removeChild(monster);
+                }
+            });
+            activeMonsters = [];
+
+            // Stop camera
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+                cameraStream = null;
+            }
+
+            // Hide game elements
+            document.getElementById('cameraContainer').classList.add('hidden');
+            document.getElementById('gameContainer').classList.add('hidden');
+            document.getElementById('collectionUI').classList.add('hidden');
+            document.getElementById('statusOverlay').classList.remove('hidden');
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (locationWatchId !== null) {
+                navigator.geolocation.clearWatch(locationWatchId);
+            }
+            stopGame();
+        });
+
+        // Handle visibility change (pause/resume)
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && gameStarted) {
+                // Pause game when tab is hidden
+                if (monsterSpawnInterval) {
+                    clearInterval(monsterSpawnInterval);
+                    monsterSpawnInterval = null;
+                }
+            } else if (!document.hidden && gameStarted) {
+                // Resume game when tab is visible
+                if (!monsterSpawnInterval) {
+                    startSpawningMonsters();
+                }
+            }
+        });
+    </script>
+</body>
+</html>
