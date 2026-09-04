@@ -10990,6 +10990,7 @@ function normalizeGpsKioskDescriptor(raw) {
 var _gpsFaceApiPromise = null;
 var _gpsFaceModelsReady = false;
 var _gpsRegisteredFaceCache = {};
+var _gpsRegisteredFacePromiseCache = {};
 
 function loadGpsFaceApiModels() {
     if (_gpsFaceModelsReady) return Promise.resolve();
@@ -11022,6 +11023,20 @@ function loadGpsFaceApiModels() {
     return _gpsFaceApiPromise;
 }
 
+function loadOneGpsEmployeeFace(outlet, employeeId) {
+    var cacheKey = String(outlet || '') + '/' + String(employeeId == null ? '' : employeeId);
+    if (_gpsRegisteredFaceCache[cacheKey]) return Promise.resolve(_gpsRegisteredFaceCache[cacheKey]);
+    if (_gpsRegisteredFacePromiseCache[cacheKey]) return _gpsRegisteredFacePromiseCache[cacheKey];
+    _gpsRegisteredFacePromiseCache[cacheKey] = FirebaseStorage.loadGpsKioskFace(outlet, employeeId).then(function(face) {
+        if (face) _gpsRegisteredFaceCache[cacheKey] = face;
+        return face;
+    }).catch(function(error) {
+        delete _gpsRegisteredFacePromiseCache[cacheKey];
+        throw error;
+    });
+    return _gpsRegisteredFacePromiseCache[cacheKey];
+}
+
 async function verifyGpsEmployeeFace(employee) {
     var video = document.getElementById('gps_video');
     var outlet = typeof getRbmOutlet === 'function' ? getRbmOutlet() : '';
@@ -11032,12 +11047,7 @@ async function verifyGpsEmployeeFace(employee) {
         throw new Error('Data wajah Firebase tidak tersedia.');
     }
     var employeeFaceId = employee.id != null ? employee.id : employee.name;
-    var cacheKey = outlet + '/' + String(employeeFaceId);
-    var registeredFace = _gpsRegisteredFaceCache[cacheKey];
-    if (!registeredFace) {
-        registeredFace = await FirebaseStorage.loadGpsKioskFace(outlet, employeeFaceId);
-        if (registeredFace) _gpsRegisteredFaceCache[cacheKey] = registeredFace;
-    }
+    var registeredFace = await loadOneGpsEmployeeFace(outlet, employeeFaceId);
     var registeredDescriptor = normalizeGpsKioskDescriptor(registeredFace);
     if (!registeredDescriptor || registeredDescriptor.length !== 128) {
         throw new Error('Wajah karyawan belum didaftarkan.');
@@ -11414,11 +11424,8 @@ async function continueAbsensiWithPassword() {
     }
     try {
         var faceId = employee.id != null ? employee.id : employee.name;
-        var faceCacheKey = outlet + '/' + String(faceId);
-        if (!_gpsRegisteredFaceCache[faceCacheKey] && FirebaseStorage.loadGpsKioskFace) {
-            FirebaseStorage.loadGpsKioskFace(outlet, faceId).then(function(face) {
-                if (face) _gpsRegisteredFaceCache[faceCacheKey] = face;
-            }).catch(function() {});
+        if (FirebaseStorage.loadGpsKioskFace) {
+            loadOneGpsEmployeeFace(outlet, faceId).catch(function() {});
         }
         loadGpsFaceApiModels().catch(function() {});
     } catch (warmupError) {}
@@ -12658,33 +12665,11 @@ async function processAbsensiGPS(type) {
         showCustomAlert("Masukkan password lalu tekan Lanjutkan terlebih dahulu.", "Akses Ditolak", "error");
         return;
     }
-    const passwordInput = document.getElementById('gps_absen_password');
-    const password = passwordInput ? passwordInput.value : '';
     const employees = (window._gpsKioskRosterEmployees && window._gpsKioskRosterEmployees.length)
         ? window._gpsKioskRosterEmployees
         : getCachedParsedStorage(getRbmStorageKey('RBM_EMPLOYEES'), []);
     const employee = employees.find(e => e && e.name === name);
-    const outlet = typeof getRbmOutlet === 'function' ? getRbmOutlet() : '';
-    let configuredPassword = '';
-    if (!employee || typeof FirebaseStorage === 'undefined' || !FirebaseStorage.loadAbsensiPassword || !outlet) {
-        showCustomAlert("Password absensi hanya dapat diperiksa saat terhubung ke Firebase.", "Akses Ditolak", "error");
-        return;
-    }
-    try {
-        configuredPassword = await FirebaseStorage.loadAbsensiPassword(outlet, employee.id != null ? employee.id : employee.name);
-    } catch (error) {
-        showCustomAlert("Gagal mengambil password dari Firebase. Periksa koneksi internet.", "Akses Ditolak", "error");
-        return;
-    }
-    if (!configuredPassword) {
-        showCustomAlert("Password absensi belum diatur untuk nama ini. Hubungi Owner.", "Akses Ditolak", "error");
-        return;
-    }
-    if (!password || password !== configuredPassword) {
-        showCustomAlert("Password absensi salah.", "Akses Ditolak", "error");
-        if (passwordInput) { passwordInput.value = ''; passwordInput.focus(); }
-        return;
-    }
+    if (!employee) { showCustomAlert("Data karyawan tidak ditemukan.", "Akses Ditolak", "error"); return; }
 
     try {
         await verifyGpsEmployeeFace(employee);
