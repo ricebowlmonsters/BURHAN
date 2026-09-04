@@ -10989,6 +10989,7 @@ function normalizeGpsKioskDescriptor(raw) {
 
 var _gpsFaceApiPromise = null;
 var _gpsFaceModelsReady = false;
+var _gpsRegisteredFaceCache = {};
 
 function loadGpsFaceApiModels() {
     if (_gpsFaceModelsReady) return Promise.resolve();
@@ -11031,13 +11032,18 @@ async function verifyGpsEmployeeFace(employee) {
         throw new Error('Data wajah Firebase tidak tersedia.');
     }
     var employeeFaceId = employee.id != null ? employee.id : employee.name;
-    var registeredFace = await FirebaseStorage.loadGpsKioskFace(outlet, employeeFaceId);
+    var cacheKey = outlet + '/' + String(employeeFaceId);
+    var registeredFace = _gpsRegisteredFaceCache[cacheKey];
+    if (!registeredFace) {
+        registeredFace = await FirebaseStorage.loadGpsKioskFace(outlet, employeeFaceId);
+        if (registeredFace) _gpsRegisteredFaceCache[cacheKey] = registeredFace;
+    }
     var registeredDescriptor = normalizeGpsKioskDescriptor(registeredFace);
     if (!registeredDescriptor || registeredDescriptor.length !== 128) {
         throw new Error('Wajah karyawan belum didaftarkan.');
     }
     await loadGpsFaceApiModels();
-    var options = new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.5 });
+    var options = new faceapi.TinyFaceDetectorOptions({ inputSize: 128, scoreThreshold: 0.55 });
     var detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks().withFaceDescriptor();
     if (!detection || !detection.descriptor) throw new Error('Wajah tidak terlihat jelas.');
     var distance = faceapi.euclideanDistance(Array.from(detection.descriptor), registeredDescriptor);
@@ -11406,6 +11412,16 @@ async function continueAbsensiWithPassword() {
         checkDistance();
         return;
     }
+    try {
+        var faceId = employee.id != null ? employee.id : employee.name;
+        var faceCacheKey = outlet + '/' + String(faceId);
+        if (!_gpsRegisteredFaceCache[faceCacheKey] && FirebaseStorage.loadGpsKioskFace) {
+            FirebaseStorage.loadGpsKioskFace(outlet, faceId).then(function(face) {
+                if (face) _gpsRegisteredFaceCache[faceCacheKey] = face;
+            }).catch(function() {});
+        }
+        loadGpsFaceApiModels().catch(function() {});
+    } catch (warmupError) {}
     window._gpsPasswordVerifiedName = name;
     try {
         const outlet = typeof getRbmOutlet === 'function' ? getRbmOutlet() : '';
@@ -11515,16 +11531,22 @@ function resetAbsensiPassword() {
 }
 
 async function downloadEmployeeSlipGaji() {
+    const downloadButton = document.getElementById('gps_download_slip');
     const name = document.getElementById('gps_absen_name')?.value || '';
     if (!name || window._gpsPasswordVerifiedName !== name) {
         showCustomAlert('Masukkan password lalu tekan Lanjutkan terlebih dahulu.', 'Akses Ditolak', 'error');
         return;
     }
+    if (downloadButton) { downloadButton.disabled = true; downloadButton.textContent = 'Membuat Slip...'; }
     const employees = (window._gpsKioskRosterEmployees && window._gpsKioskRosterEmployees.length)
         ? window._gpsKioskRosterEmployees
         : getCachedParsedStorage(getRbmStorageKey('RBM_EMPLOYEES'), []);
     let employee = employees.find(e => e && e.name === name);
-    if (!employee) return;
+    if (!employee) {
+        if (downloadButton) { downloadButton.disabled = false; downloadButton.textContent = '📄 Download Slip Gaji'; }
+        showCustomAlert('Data karyawan tidak ditemukan.', 'Gagal Download', 'error');
+        return;
+    }
     try {
         const outlet = typeof getRbmOutlet === 'function' ? getRbmOutlet() : '';
         if (window.RBMStorage && window.RBMStorage._db && outlet) {
@@ -11563,14 +11585,19 @@ async function downloadEmployeeSlipGaji() {
     const empKey = employee.id != null ? 'id_' + String(employee.id) : 'name_' + String(name).replace(/[.#$\[\]]/g, '_');
     const data = gajiData[empKey] || {};
     let absensiPeriod = {};
+    let jadwalData = {};
     let gpsLogs = [];
     try {
         const outlet = typeof getRbmOutlet === 'function' ? getRbmOutlet() : '';
         if (typeof FirebaseStorage !== 'undefined' && FirebaseStorage.loadAbsensiJadwal && outlet) {
-            const remoteAbsensi = await FirebaseStorage.loadAbsensiJadwal(outlet, 'absensi', start, endKey);
-            if (remoteAbsensi && typeof remoteAbsensi === 'object') absensiPeriod = remoteAbsensi;
-            const remoteGpsLogs = await FirebaseStorage.loadGpsLogs(outlet, start, endKey);
-            if (Array.isArray(remoteGpsLogs)) gpsLogs = remoteGpsLogs;
+            const remoteData = await Promise.all([
+                FirebaseStorage.loadAbsensiJadwal(outlet, 'absensi', start, endKey),
+                FirebaseStorage.loadAbsensiJadwal(outlet, 'jadwal', start, endKey),
+                FirebaseStorage.loadGpsLogs(outlet, start, endKey)
+            ]);
+            if (remoteData[0] && typeof remoteData[0] === 'object') absensiPeriod = remoteData[0];
+            if (remoteData[1] && typeof remoteData[1] === 'object') jadwalData = remoteData[1];
+            if (Array.isArray(remoteData[2])) gpsLogs = remoteData[2];
         }
     } catch (error) {
         console.warn('Data absensi online tidak dapat dimuat:', error);
@@ -11602,6 +11629,7 @@ async function downloadEmployeeSlipGaji() {
     const formatMoney = value => 'Rp ' + Math.round(value || 0).toLocaleString('id-ID');
     const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
     if (typeof html2canvas === 'undefined') {
+        if (downloadButton) { downloadButton.disabled = false; downloadButton.textContent = '📄 Download Slip Gaji'; }
         showCustomAlert('Fitur download JPG belum siap. Muat ulang halaman lalu coba lagi.', 'Gagal Download', 'error');
         return;
     }
@@ -11609,14 +11637,32 @@ async function downloadEmployeeSlipGaji() {
     slip.style.cssText = 'position:fixed; left:-10000px; top:0; width:620px; padding:30px; background:#fff; color:#000; font-family:"Courier New",Courier,monospace; font-size:13px; box-sizing:border-box;';
     slip.innerHTML = `<div style="text-align:center; border-bottom:2px solid #000; padding-bottom:10px; margin-bottom:20px;"><div style="font-size:18px; font-weight:bold;">SLIP GAJI KARYAWAN</div><div style="font-size:16px; font-weight:bold; margin-top:5px;">RICE BOWL MONSTERS</div><div style="font-size:14px; margin-top:5px;">PERIODE ${month}/${year}</div></div><div style="margin-bottom:20px; line-height:1.6;">Nama <span style="margin-left:56px;">: ${escapeHtml(name)}</span><br>Jabatan <span style="margin-left:36px;">: ${escapeHtml(employee.jabatan || '-')}</span><br>Bagian <span style="margin-left:45px;">: Rice Bowl Monsters</span></div><div style="font-weight:bold; margin-bottom:8px;">Pendapatan (+):</div><table style="width:100%; border-collapse:collapse; margin-bottom:6px;"><tr><td>Gaji Pokok</td><td style="text-align:right;">${formatMoney(gajiPokok)}</td></tr><tr><td>Tunjangan</td><td style="text-align:right;">${formatMoney(tunjangan)}</td></tr><tr><td>Lembur Minggu</td><td style="text-align:right;">${formatMoney(lemburMinggu)}</td></tr><tr><td>Uang Makan</td><td style="text-align:right;">${formatMoney(uangMakan)}</td></tr><tr><td>Parkir</td><td style="text-align:right;">${formatMoney(parkir)}</td></tr><tr><td>Transport</td><td style="text-align:right;">${formatMoney(transport)} +</td></tr><tr style="border-top:1px solid #000;"><td style="font-weight:bold; padding-top:8px;">Total</td><td style="font-weight:bold; text-align:right; padding-top:8px;">${formatMoney(totalPendapatan)}</td></tr></table><div style="font-weight:bold; margin:20px 0 8px;">Pengurangan (-):</div><table style="width:100%; border-collapse:collapse;"><tr><td>Potongan Absensi</td><td style="text-align:right;">${formatMoney(totalPotKehadiran)}</td></tr><tr><td>Potongan Terlambat</td><td style="text-align:right;">${formatMoney(potonganTerlambat)}</td></tr><tr><td>Hutang Karyawan</td><td style="text-align:right;">${formatMoney(hutang)}</td></tr><tr><td>Potongan BPJS</td><td style="text-align:right;">${formatMoney(potonganBpjs)}</td></tr><tr style="border-top:2px solid #000; background:#f0f0f0;"><td style="font-weight:bold; padding-top:10px;">GRAND TOTAL</td><td style="font-weight:bold; text-align:right; padding-top:10px;">${formatMoney(grandTotal)}</td></tr><tr style="background:#eef2ff;"><td style="font-weight:bold; color:#1e40af; padding-top:8px;">PEMBULATAN</td><td style="font-weight:bold; color:#1e40af; text-align:right; padding-top:8px;">${formatMoney(Math.round(grandTotal / 1000) * 1000)}</td></tr></table><div style="margin-top:45px; font-size:11px;">Dibuat Oleh:<br><br><br><strong>Admin</strong></div>`;
     document.body.appendChild(slip);
-    html2canvas(slip, { scale: 2, backgroundColor: '#fff' }).then(function(canvas) {
+    html2canvas(slip, { scale: 1, backgroundColor: '#fff', logging: false, useCORS: false }).then(function(canvas) {
         const link = document.createElement('a');
         link.download = 'Slip_Gaji_' + name.replace(/[^a-z0-9]/gi, '_') + '_' + month + '_' + year + '.jpg';
-        link.href = canvas.toDataURL('image/jpeg', 0.95);
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.href = canvas.toDataURL('image/jpeg', 0.85);
+        document.body.appendChild(link);
         link.click();
+        if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+            link.id = 'gps-slip-open-link';
+            link.textContent = 'Buka Slip JPG (tekan lama untuk simpan)';
+            link.style.cssText = 'display:block; margin:10px 0; padding:10px; text-align:center; background:#e0f2fe; color:#0369a1; border-radius:8px; font-size:12px; text-decoration:none;';
+            var parent = downloadButton && downloadButton.parentElement;
+            if (parent) {
+                var oldLink = document.getElementById('gps-slip-open-link');
+                if (oldLink && oldLink !== link) oldLink.remove();
+                parent.appendChild(link);
+            }
+        } else {
+            setTimeout(function() { link.remove(); }, 1000);
+        }
+        if (downloadButton) { downloadButton.disabled = false; downloadButton.textContent = '📄 Download Slip Gaji'; }
         slip.remove();
     }).catch(function(error) {
         slip.remove();
+        if (downloadButton) { downloadButton.disabled = false; downloadButton.textContent = '📄 Download Slip Gaji'; }
         showCustomAlert('Gagal membuat JPG slip: ' + error.message, 'Gagal Download', 'error');
     });
 }
@@ -12646,7 +12692,6 @@ async function processAbsensiGPS(type) {
         showCustomAlert(faceError && faceError.message ? faceError.message : 'Verifikasi wajah gagal.', 'Akses Ditolak', 'error');
         return;
     }
-    
     // Gunakan log spesifik yang sudah di-fetch oleh updateGpsJadwalDisplay
     const todayLogs = window._cachedGpsMyLogs || [];
     
@@ -12929,7 +12974,7 @@ async function _executeAbsensiGPS(type) {
     const context = canvas.getContext('2d');
 
     // [OPTIMASI KILAT] Perkecil ukuran foto drastis agar HP tidak lemot/hang
-    const MAX_WIDTH = 100; // Turun ke 200 agar sangat ringan
+    const MAX_WIDTH = 80;
     let scale = 1;
     if (video.videoWidth > MAX_WIDTH) {
         scale = MAX_WIDTH / video.videoWidth;
@@ -12951,7 +12996,7 @@ async function _executeAbsensiGPS(type) {
     context.fillText(`${dateStr} ${timeStr} | ${locStr}`, 5, canvas.height - 8);
 
     // [OPTIMASI KILAT] Gunakan toDataURL langsung karena resolusi sudah sangat kecil (toBlob kadang lambat di HP jadul)
-    const photoData = canvas.toDataURL('image/jpeg', 0.3);
+    const photoData = canvas.toDataURL('image/jpeg', 0.25);
 
     const log = {
         id: Date.now(),
