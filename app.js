@@ -278,6 +278,147 @@ class UIHelper {
   }
 }
 
+// Widget Status Online & Notifikasi
+class OnlineWidget {
+  static init(user) {
+    if (document.getElementById('rbm-online-widget')) return;
+    
+    // Aktifkan tracking Firebase jika tersedia
+    if (typeof FirebaseStorage !== 'undefined' && FirebaseStorage.trackPresence) {
+      FirebaseStorage.trackPresence(user.username, user.nama, user.role);
+    }
+
+    const style = document.createElement('style');
+    style.innerHTML = `
+      #rbm-online-widget { position: fixed; bottom: 20px; right: 20px; display: flex; gap: 10px; z-index: 9999; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+      .rbm-widget-box { background: white; border-radius: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); padding: 10px 16px; display: flex; align-items: center; gap: 8px; cursor: pointer; border: 1px solid #e5e7eb; transition: all 0.2s; position: relative; }
+      .rbm-widget-box:hover { background: #f9fafb; transform: translateY(-2px); }
+      .rbm-notif-badge { background: #ef4444; color: white; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 10px; position: absolute; top: -5px; right: -5px; display: none; }
+      .rbm-online-dot { width: 10px; height: 10px; background: #10b981; border-radius: 50%; box-shadow: 0 0 4px #10b981; }
+      #rbm-online-dropdown { position: absolute; bottom: 50px; right: 0; background: white; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); width: 220px; padding: 12px; display: none; border: 1px solid #e5e7eb; flex-direction: column; gap: 5px; max-height: 300px; overflow-y: auto; cursor: default; }
+      .rbm-online-user { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 8px 4px; border-bottom: 1px solid #f3f4f6; color: #374151; font-weight: 500; }
+      .rbm-online-user:last-child { border-bottom: none; }
+      
+      #rbm-notif-dropdown { position: absolute; bottom: 50px; right: 120px; background: white; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); width: 280px; padding: 12px; display: none; border: 1px solid #e5e7eb; flex-direction: column; gap: 5px; max-height: 350px; overflow-y: auto; cursor: default; }
+      .rbm-notif-item { padding: 10px; border-radius: 6px; background: #f9fafb; border: 1px solid #e5e7eb; font-size: 12px; cursor: pointer; transition: background 0.2s; line-height: 1.4; }
+      .rbm-notif-item:hover { background: #f3f4f6; }
+    `;
+    document.head.appendChild(style);
+
+    const widget = document.createElement('div');
+    widget.id = 'rbm-online-widget';
+    widget.innerHTML = 
+      '<div class="rbm-widget-box" id="rbm-notif-btn" onclick="document.getElementById(\'rbm-notif-dropdown\').style.display = document.getElementById(\'rbm-notif-dropdown\').style.display === \'flex\' ? \'none\' : \'flex\'">' +
+        '<span style="font-size: 16px;">🔔</span>' +
+        '<span style="font-size: 13px; font-weight: 600; color: #374151;">Notifikasi</span>' +
+        '<div class="rbm-notif-badge" id="rbm-notif-badge">0</div>' +
+        '<div id="rbm-notif-dropdown" onclick="event.stopPropagation()">' +
+          '<div style="font-size: 11px; font-weight: bold; text-transform: uppercase; color: #6b7280; margin-bottom: 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px;">Pemberitahuan</div>' +
+          '<div id="rbm-notif-list">Memuat...</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="rbm-widget-box" id="rbm-online-btn" onclick="document.getElementById(\'rbm-online-dropdown\').style.display = document.getElementById(\'rbm-online-dropdown\').style.display === \'flex\' ? \'none\' : \'flex\'">' +
+        '<div class="rbm-online-dot"></div>' +
+        '<span style="font-size: 13px; font-weight: 600; color: #374151;" id="rbm-online-count">1 Online</span>' +
+        '<div id="rbm-online-dropdown" onclick="event.stopPropagation()">' +
+          '<div style="font-size: 11px; font-weight: bold; text-transform: uppercase; color: #6b7280; margin-bottom: 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px;">Aktivitas Pengguna</div>' +
+          '<div id="rbm-online-list">Memuat...</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(widget);
+
+    document.addEventListener('click', function(event) {
+      const btn = document.getElementById('rbm-online-btn');
+      const btnNotif = document.getElementById('rbm-notif-btn');
+      const dropdown = document.getElementById('rbm-online-dropdown');
+      const dropdownNotif = document.getElementById('rbm-notif-dropdown');
+      if (btn && dropdown && !btn.contains(event.target)) { dropdown.style.display = 'none'; }
+      if (btnNotif && dropdownNotif && !btnNotif.contains(event.target)) { dropdownNotif.style.display = 'none'; }
+    });
+
+    if (typeof firebase !== 'undefined' && firebase.database) {
+      setTimeout(() => {
+        const db = firebase.database();
+        
+        // --- Logika Notifikasi Cerdas ---
+        const isOwner = user.role === 'owner' || (user.username || '').toLowerCase() === 'burhan';
+        const isManager = user.role === 'manager';
+        
+        const processNotifs = () => {
+            let unreadCount = 0; let notifHtml = '';
+            
+            const checkData = (dataMap, typeStr) => {
+                if (!dataMap) return;
+                Object.keys(dataMap).forEach(key => {
+                    const item = dataMap[key];
+                    if (isOwner) {
+                        if ((!item.status || item.status === 'pending') && !item.viewedByOwner) {
+                            unreadCount++;
+                            notifHtml += `<div class="rbm-notif-item" onclick="window.location.href='rbm-pengajuan.html'"><b>Pengajuan Baru Masuk</b><br>Outlet: ${item.outlet || 'Umum'}</div>`;
+                        }
+                    } else if (isManager) {
+                        if (item.outlet === user.outlet && item.status === 'approved' && !item.viewedByManager) {
+                            unreadCount++;
+                            notifHtml += `<div class="rbm-notif-item" onclick="window.markManagerNotifRead('${typeStr}', '${key}')"><b style="color:#059669;">✅ Pengajuan Disetujui!</b><br>Silakan klik pesan ini.</div>`;
+                        }
+                    }
+                });
+            };
+
+            const render = () => {
+                unreadCount = 0; notifHtml = '';
+                checkData(window._notifTf, 'tf');
+                checkData(window._notifPc, 'pc');
+                
+                const badge = document.getElementById('rbm-notif-badge');
+                const list = document.getElementById('rbm-notif-list');
+                if (badge) { badge.textContent = unreadCount; badge.style.display = unreadCount > 0 ? 'block' : 'none'; }
+                if (list) { list.innerHTML = notifHtml || '<div style="color:#9ca3af; text-align:center; padding:10px;">Tidak ada notifikasi</div>'; }
+            };
+
+            db.ref('rbm_pro/pengajuan_tf').on('value', snap => { window._notifTf = snap.val(); render(); });
+            db.ref('rbm_pro/petty_cash/pengajuan').on('value', snap => { window._notifPc = snap.val(); render(); });
+            
+            window.markManagerNotifRead = (type, key) => {
+                const path = type === 'tf' ? `rbm_pro/pengajuan_tf/${key}` : `rbm_pro/petty_cash/pengajuan/${key}`;
+                db.ref(path).update({ viewedByManager: true });
+                
+                if (typeof CustomUI !== 'undefined') {
+                    CustomUI.alert("Tunggu pemrosesan dana dan kelola dana dengan sebaik-baiknya.", "Pesan dari Owner");
+                } else if (typeof UIHelper !== 'undefined') {
+                    UIHelper.showModal(
+                        'Pesan dari Owner',
+                        'Tunggu pemrosesan dana dan kelola dana dengan sebaik-baiknya.',
+                        [{ text: 'Tutup', action: 'close', class: 'btn-primary' }]
+                    );
+                } else {
+                    alert("Pesan dari Owner:\n\nTunggu pemrosesan dana dan kelola dana dengan sebaik-baiknya.");
+                }
+            };
+        };
+        processNotifs();
+
+        db.ref('app_state/presence').on('value', snap => {
+          const val = snap.val() || {};
+          let count = 0; let html = '';
+          Object.keys(val).forEach(uid => {
+            const u = val[uid];
+            if (u.connections && Object.keys(u.connections).length > 0) {
+              count++;
+              const n = u.info ? (u.info.nama || u.info.username) : uid;
+              html += '<div class="rbm-online-user"><div class="rbm-online-dot"></div> ' + n + '</div>';
+            }
+          });
+          const cEl = document.getElementById('rbm-online-count');
+          const lEl = document.getElementById('rbm-online-list');
+          if (cEl) cEl.textContent = count + ' Online';
+          if (lEl) lEl.innerHTML = html || '<div style="font-size:12px; color:#9ca3af;">Tidak ada</div>';
+        });
+      }, 1500);
+    }
+  }
+}
+
 // Initialize app
 let appState;
 
@@ -317,6 +458,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }).catch(function() {});
   }
+
+  OnlineWidget.init(appState.user);
+
   const currentPage = window.location.pathname.split('/').pop();
   initializePage(currentPage);
 });

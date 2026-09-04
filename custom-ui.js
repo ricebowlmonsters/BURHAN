@@ -17,7 +17,15 @@ const CustomUI = {
                 box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);
                 transform: scale(0.9); transition: transform 0.2s;
                 font-family: 'Inter', sans-serif;
+                position: relative;
             }
+            .custom-ui-close-btn {
+                position: absolute; top: 12px; right: 16px;
+                background: transparent; border: none;
+                font-size: 24px; font-weight: bold; color: #9ca3af;
+                cursor: pointer; transition: color 0.2s; line-height: 1;
+            }
+            .custom-ui-close-btn:hover { color: #ef4444; }
             .custom-ui-overlay.show .custom-ui-modal { transform: scale(1); }
             .custom-ui-icon { font-size: 48px; margin-bottom: 16px; display: block; }
             .custom-ui-title { font-size: 20px; font-weight: 700; margin: 0 0 8px 0; color: #1f2937; }
@@ -42,6 +50,7 @@ const CustomUI = {
         div.className = 'custom-ui-overlay';
         div.innerHTML = `
             <div class="custom-ui-modal">
+                <button id="custom-ui-close" class="custom-ui-close-btn">&times;</button>
                 <div id="custom-ui-icon" class="custom-ui-icon"></div>
                 <h3 id="custom-ui-title" class="custom-ui-title"></h3>
                 <div id="custom-ui-message" class="custom-ui-message"></div>
@@ -62,9 +71,24 @@ const CustomUI = {
 
             iconEl.textContent = options.icon || 'ℹ️';
             titleEl.textContent = options.title || 'Informasi';
-            msgEl.innerHTML = (options.message || '').replace(/\n/g, '<br>');
+            
+            const msgStr = options.message || '';
+            // Jika pesan mengandung tag HTML, jangan ganti enter (\n) menjadi <br>
+            if (options.isHtml || /<[a-z][\s\S]*>/i.test(msgStr)) {
+                msgEl.innerHTML = msgStr;
+            } else {
+                msgEl.innerHTML = msgStr.replace(/\n/g, '<br>');
+            }
 
             actionsEl.innerHTML = '';
+
+            const closeBtn = document.getElementById('custom-ui-close');
+            if (closeBtn) {
+                closeBtn.onclick = () => {
+                    overlay.classList.remove('show');
+                    setTimeout(() => { overlay.style.display = 'none'; resolve(false); }, 200);
+                };
+            }
 
             if (options.type === 'confirm') {
                 const cancelBtn = document.createElement('button');
@@ -167,12 +191,23 @@ class LocalDB {
 }
 
 class ServerDB {
-    constructor(apiUrl) { this.url = apiUrl || "http://localhost:3001/db"; }
-    async _r(method, data = null) {
+    constructor(apiUrl) {
+        this.url = apiUrl || "http://localhost:3001/db";
+        this._etag = null;
+        this._cache = {}; // cache per path agar 304 tetap bisa serve data
+    }
+    _baseUrl() {
+        return (this.url || '').toString().replace(/\/db\/?$/, '');
+    }
+    async _r(method, data = null, urlOverride = null) {
         try {
             const opts = { method, headers: { "Content-Type": "application/json" } };
+            if (method === "GET" && this._etag) opts.headers["If-None-Match"] = this._etag;
             if (data) opts.body = JSON.stringify(data);
-            const res = await fetch(this.url, opts);
+            const res = await fetch(urlOverride || this.url, opts);
+            const etag = res.headers && res.headers.get ? res.headers.get("ETag") : null;
+            if (etag) this._etag = etag;
+            if (res.status === 304) return "__NOT_MODIFIED__";
             return await res.json();
         } catch (e) { return null; }
     }
@@ -181,27 +216,57 @@ class ServerDB {
         const n = (!path || path === "/") ? "" : path.replace(/^\/|\/$/g, "");
         return {
             once: (eventType) => new Promise(async resolve => {
-                const f = await t._r("GET") || {};
-                let v = f;
-                if (n) { for (const p of n.split("/")) { if (v && typeof v === "object" && p in v) v = v[p]; else { v = null; break; } } }
-                resolve({ val: () => v, exists: () => v !== null, forEach: (cb) => { if(v && typeof v === 'object') Object.entries(v).forEach(([k,val]) => cb({key:k, val:()=>val})); } });
+                // [OPTIMASI] Ambil hanya subtree yang dibutuhkan: /db?path=a/b/c
+                if (n) {
+                    const url = t.url + "?path=" + encodeURIComponent(n);
+                    const v = await t._r("GET", null, url);
+                    if (v !== null && v !== "__NOT_MODIFIED__") t._cache[n] = v;
+                    const outVal = (v === "__NOT_MODIFIED__") ? (t._cache.hasOwnProperty(n) ? t._cache[n] : null) : v;
+                    resolve({
+                        val: () => outVal,
+                        exists: () => outVal !== null,
+                        forEach: (cb) => { if (outVal && typeof outVal === 'object') Object.entries(outVal).forEach(([k,val]) => cb({key:k, val:()=>val})); }
+                    });
+                    return;
+                }
+                const f = await t._r("GET");
+                if (f !== null && f !== "__NOT_MODIFIED__") t._cache[""] = f;
+                const outRoot = (f === "__NOT_MODIFIED__") ? (t._cache.hasOwnProperty("") ? t._cache[""] : null) : (f || {});
+                resolve({
+                    val: () => outRoot,
+                    exists: () => outRoot !== null,
+                    forEach: (cb) => { if (outRoot && typeof outRoot === 'object') Object.entries(outRoot).forEach(([k,val]) => cb({key:k, val:()=>val})); }
+                });
             }),
             on: function(eventType, cb) { this.once(eventType).then(s => cb(s)); },
             off: () => {},
             set: (data) => new Promise(async resolve => {
-                const f = await t._r("GET") || {};
-                if (!n) await t._r("POST", data);
-                else {
-                    const p = n.split("/");
-                    let c = f;
-                    for (let i = 0; i < p.length - 1; i++) { if (!c[p[i]] || typeof c[p[i]] !== "object") c[p[i]] = {}; c = c[p[i]]; }
-                    c[p[p.length - 1]] = data;
-                    await t._r("POST", f);
+                if (!n) {
+                    await t._r("POST", data);
+                    resolve();
+                    return;
                 }
+                // [OPTIMASI] Set per-path: POST /db/path {path,value}
+                const base = t._baseUrl();
+                await t._r("POST", { path: n, value: data, mode: "set" }, base + "/db/path");
                 resolve();
             }),
-            update: function(data) { return this.set(data); },
-            remove: function() { return this.set(null); },
+            update: function(data) {
+                if (!n) return this.set(data);
+                const base = t._baseUrl();
+                return new Promise(async resolve => {
+                    await t._r("POST", { path: n, value: data, mode: "merge" }, base + "/db/path");
+                    resolve();
+                });
+            },
+            remove: function() {
+                if (!n) return this.set(null);
+                const base = t._baseUrl();
+                return new Promise(async resolve => {
+                    await t._r("DELETE", null, base + "/db/path?path=" + encodeURIComponent(n));
+                    resolve();
+                });
+            },
             push: (data) => new Promise(resolve => {
                 const k = "id_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
                 t.ref(n ? n + "/" + k : k).set(data).then(() => resolve({ key: k }));
@@ -262,7 +327,7 @@ function isRbmOfflineMode() {
 var RBM_DEFAULT_FIREBASE_CONFIG = {
     apiKey: "AIzaSyDWQG53tP2zKILTwPSJQpiVzFNyvYLxLqw",
     authDomain: "ricebowlmonst.firebaseapp.com",
-    databaseURL: "https://ricebowlmonst-default-rtdb.asia-southeast1.firebasedatabase.app",
+    databaseURL: "https://ricebowlmonst-default-rtdb.firebaseio.com",
     projectId: "ricebowlmonst",
     storageBucket: "ricebowlmonst.firebasestorage.app",
     messagingSenderId: "723669558962",
@@ -281,6 +346,19 @@ function getRbmConnections() {
 function ensureDefaultFirebaseConnection() {
     if (!navigator.onLine) return;
     var conns = getRbmConnections();
+    
+    // [PERBAIKAN] Auto-fix URL Firebase yang salah di LocalStorage
+    let hasChanges = false;
+    conns.forEach(function(conn) {
+        if (conn && conn.config && conn.config.databaseURL && conn.config.databaseURL.indexOf('asia-southeast1') >= 0) {
+            conn.config.databaseURL = 'https://ricebowlmonst-default-rtdb.firebaseio.com';
+            hasChanges = true;
+        }
+    });
+    if (hasChanges) {
+        try { localStorage.setItem('rbm_db_connections', JSON.stringify(conns)); } catch(e) {}
+    }
+
     if (conns.length > 0) return;
     conns = [{ name: 'Online (Firebase)', config: RBM_DEFAULT_FIREBASE_CONFIG }];
     try {

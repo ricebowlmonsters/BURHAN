@@ -1,11 +1,60 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <base target="_top">
   <meta charset="UTF-8">
+  <script>
+  (function(){
+    var b = document.createElement('base');
+    b.target = (location.protocol === 'file:') ? '_self' : '_top';
+    document.head.appendChild(b);
+  })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RBM Pro</title>
   <link rel="stylesheet" href="rbm-pro.css">
+  <style>
+    /* CSS untuk Kalender Reservasi */
+    .calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .calendar-day-header {
+      text-align: center;
+      font-weight: bold;
+      color: #4b5563;
+      padding: 8px 0;
+      background: #f3f4f6;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    .calendar-day {
+      min-height: 85px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 4px;
+      background: #fff;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      overflow: hidden;
+    }
+    .calendar-day:hover { border-color: #4C2A85; box-shadow: 0 4px 8px rgba(76, 42, 133, 0.15); transform: translateY(-2px); }
+    .calendar-day.other-month { background: #f9fafb; opacity: 0.4; pointer-events: none; }
+    .calendar-day.today { border-color: #3b82f6; background: #eff6ff; border-width: 2px; }
+    .calendar-day-number { font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 2px; text-align: right; padding-right: 4px; }
+    .cal-event { 
+      font-size: 10px; padding: 4px 6px; border-radius: 4px; color: #fff; 
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600;
+    }
+    .indoor { background-color: #3b82f6; } /* Biru */
+    .outdoor { background-color: #10b981; } /* Hijau */
+    .vip { background-color: #8b5cf6; } /* Ungu */
+    .meeting { background-color: #f59e0b; } /* Kuning/Oranye */
+  </style>
 </head>
 <body>
 <script>
@@ -13,7 +62,7 @@
 </script>
 <header class="rbm-page-header">
   <a href="index.html" class="rbm-back-btn">&#8249;</a>
-  <h1 class="rbm-page-title">Reservasi</h1>
+  <h1 class="rbm-page-title" style="display:flex; align-items:center; gap:10px;">Reservasi <span onclick="openResSettingsModal()" style="cursor:pointer; font-size:20px; transition: transform 0.2s;" onmouseover="this.style.transform='rotate(90deg)'" onmouseout="this.style.transform='none'" title="Pengaturan Reservasi">⚙️</span></h1>
 </header>
 <div class="rbm-content-wrap">
 <section class="rbm-outlet-card" style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px;">
@@ -132,9 +181,9 @@
         <div class="table-wrapper">
             <table class="data-table" id="reservasi_table">
                 <thead>
-                    <tr><th>ID</th><th>Tanggal</th><th>Nama</th><th>Jam</th><th>Tamu</th><th>Ruangan</th><th>DP</th><th>Aksi</th></tr>
+                    <tr><th>ID</th><th>Tanggal</th><th>Nama</th><th>Jam</th><th>Tamu</th><th>Ruangan</th><th>Menu</th><th>DP</th><th>Aksi</th></tr>
                 </thead>
-                <tbody id="reservasi_tbody"><tr><td colspan="8" class="table-empty">Klik Tampilkan Data</td></tr></tbody>
+                <tbody id="reservasi_tbody"><tr><td colspan="9" class="table-empty">Klik Tampilkan Data</td></tr></tbody>
             </table>
         </div>
     </div>
@@ -206,6 +255,73 @@
     </div>
   </div>
 </div>
+
+<!-- Modal Pengaturan Reservasi -->
+<div id="resSettingsModal" class="modal-overlay" style="display:none; align-items:flex-start; padding-top: 50px; overflow-y: auto; z-index: 9999;">
+  <div class="modal-content" style="background:white; padding:20px; width:800px; max-width:95%; border-radius:8px; position: relative;">
+    <span class="modal-close" onclick="closeResSettingsModal()" style="color:#333; top:10px; right:15px;">&times;</span>
+    <h3 style="margin-top:0;">⚙️ Pengaturan Reservasi Outlet</h3>
+    
+    <div style="margin-bottom:15px;">
+        <label style="font-size:12px; font-weight:bold;">Syarat & Ketentuan Reservasi</label>
+        <textarea id="res_set_tnc" rows="4" style="width:100%; padding:8px; margin-top:4px;" placeholder="Masukkan syarat & ketentuan..."></textarea>
+    </div>
+
+    <div style="margin-bottom:15px;">
+        <label style="font-size:12px; font-weight:bold;">PPN Pre-Order Menu (%)</label>
+        <input type="number" id="res_set_ppn" style="width:100%; padding:8px; margin-top:4px;" placeholder="Contoh: 10" min="0" max="100">
+    </div>
+
+    <div style="margin-bottom:15px;">
+        <label style="font-size:12px; font-weight:bold;">Saran DP Pre-Order (%)</label>
+        <input type="number" id="res_set_dp_percent" style="width:100%; padding:8px; margin-top:4px;" placeholder="Contoh: 50" min="0" max="100">
+    </div>
+
+    <div style="margin-bottom:15px; padding:15px; background:#f8f9fa; border-radius:8px; border:1px solid #e5e7eb;">
+        <label style="font-size:12px; font-weight:bold; display:block; margin-bottom:8px;">Informasi Rekening (Untuk Pembayaran DP)</label>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <input type="text" id="res_set_bank_name" placeholder="Nama Bank (Contoh: BCA)" style="flex:1; min-width:120px; padding:8px; border:1px solid #ccc; border-radius:4px;">
+            <input type="text" id="res_set_bank_rek" placeholder="No Rekening" style="flex:2; min-width:150px; padding:8px; border:1px solid #ccc; border-radius:4px;">
+            <input type="text" id="res_set_bank_an" placeholder="Atas Nama" style="flex:2; min-width:150px; padding:8px; border:1px solid #ccc; border-radius:4px;">
+        </div>
+    </div>
+
+    <div style="display:flex; gap:20px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:300px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <label style="font-size:12px; font-weight:bold;">Pilihan Ruangan & Foto</label>
+                <button class="btn-secondary" onclick="addResSettingItemRow('ruangan-list')" style="font-size:11px; padding:4px 8px;">+ Tambah</button>
+            </div>
+            <div id="ruangan-list"></div>
+        </div>
+        
+        <div style="flex:1; min-width:300px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <label style="font-size:12px; font-weight:bold;">Penataan Kursi/Meja & Foto</label>
+                <button class="btn-secondary" onclick="addResSettingItemRow('meja-list')" style="font-size:11px; padding:4px 8px;">+ Tambah</button>
+            </div>
+            <div id="meja-list"></div>
+        </div>
+    </div>
+
+    <div style="margin-top:20px; text-align:right;">
+        <button class="btn btn-primary" id="btnSaveResSettings" onclick="saveResSettings()" style="width:auto;">Simpan Pengaturan</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Pre-Order Menu -->
+<div id="preorderModal" class="modal-overlay" style="display:none; align-items:center; justify-content:center; z-index: 9999;">
+  <div class="modal-content" style="background:white; padding:20px; width:400px; max-width:95%; border-radius:8px; position: relative;">
+    <span class="modal-close" onclick="closePreorderModal()" style="color:#333; top:10px; right:15px; cursor:pointer;">&times;</span>
+    <h3 style="margin-top:0;">🛒 Detail Pre-Order Menu</h3>
+    <div id="preorderModalBody" style="margin-top: 15px; font-size: 13px; line-height: 1.5;"></div>
+    <div style="margin-top:20px; text-align:right;">
+        <button class="btn btn-secondary" onclick="closePreorderModal()">Tutup</button>
+    </div>
+  </div>
+</div>
+
 <script>window.RBM_PAGE = 'lihat-reservasi-view';</script>
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
@@ -215,5 +331,421 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+// ================= RESERVASI LOGIC =================
+
+// Fungsi pengaman agar data selalu berupa Array yang bersih (mengatasi error null/object dari Firebase)
+function getSafeReservasiData(key) {
+    let data = [];
+    try {
+        if (typeof getCachedParsedStorage === 'function') {
+            data = getCachedParsedStorage(key, []);
+        } else {
+            data = JSON.parse(localStorage.getItem(key) || '[]');
+        }
+    } catch(e) { data = []; }
+    
+    // Paksa menjadi array jika Firebase mengembalikan object
+    if (!Array.isArray(data)) {
+        if (data && typeof data === 'object') {
+            data = Object.keys(data).map(k => data[k]);
+        } else {
+            data = [];
+        }
+    }
+    // Bersihkan dari null atau data kosong
+    return data.filter(d => d !== null && d !== undefined && d.id);
+}
+
+function submitReservasi() {
+    const pj = document.getElementById("res_pj").value;
+    const nama = document.getElementById("res_nama").value;
+    const wa = document.getElementById("res_wa").value;
+    const tanggal = document.getElementById("res_tanggal").value;
+    const jamMulai = document.getElementById("res_jam_mulai").value;
+    const jamSelesai = document.getElementById("res_jam_selesai").value;
+    const jmlTamu = document.getElementById("res_jml_tamu").value;
+    const ruangan = document.getElementById("res_ruangan").value;
+    const meja = document.getElementById("res_meja").value;
+    const fasilitas = document.getElementById("res_fasilitas").value;
+    const dp = document.getElementById("res_dp").value;
+
+    if (!nama || !tanggal || !jamMulai) {
+        alert("Nama, Tanggal, dan Jam Mulai wajib diisi!");
+        return;
+    }
+
+    const storageKey = getRbmStorageKey('RBM_RESERVASI_DATA');
+    let reservasiData = getSafeReservasiData(storageKey);
+
+    const timestamp = new Date().toISOString();
+    const id = "RES-" + Date.now().toString().slice(-6);
+
+    const newRes = {
+        id, pj, timestamp, nama, tanggal, jamMulai, jamSelesai, wa, jmlTamu, ruangan, meja, fasilitas, dp
+    };
+
+    reservasiData.push(newRes);
+    
+    if (window.RBMStorage && typeof window.RBMStorage.setItem === 'function') {
+        window.RBMStorage.setItem(storageKey, JSON.stringify(reservasiData));
+    } else {
+        localStorage.setItem(storageKey, JSON.stringify(reservasiData));
+    }
+    
+    if (window._rbmParsedCache) {
+        window._rbmParsedCache[storageKey] = { data: reservasiData };
+    }
+    
+    alert("✅ Reservasi Berhasil Disimpan!");
+    
+    document.getElementById("res_nama").value = "";
+    document.getElementById("res_wa").value = "";
+    document.getElementById("res_jml_tamu").value = "";
+    document.getElementById("res_meja").value = "";
+    document.getElementById("res_fasilitas").value = "";
+    document.getElementById("res_dp").value = "";
+    
+    loadReservasiData();
+    if (typeof renderReservasiCalendar === 'function') renderReservasiCalendar();
+}
+
+function loadReservasiData() {
+    const tglAwal = document.getElementById("res_filter_start").value;
+    const tglAkhir = document.getElementById("res_filter_end").value;
+    const tbody = document.getElementById("reservasi_tbody");
+    if (!tbody) return;
+    
+    const storageKey = getRbmStorageKey('RBM_RESERVASI_DATA');
+    let allData = getSafeReservasiData(storageKey);
+    
+    const filtered = allData.filter(d => d.tanggal && d.tanggal >= tglAwal && d.tanggal <= tglAkhir);
+    
+    if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" class="table-empty">Tidak ada data reservasi pada rentang tanggal ini.</td></tr>';
+        return;
+    }
+
+    filtered.sort((a, b) => new Date(b.tanggal) - new Date(a.tanggal));
+
+    let html = '';
+    filtered.forEach((res) => {
+        const dpFormatted = res.dp ? 'Rp ' + parseInt(res.dp).toLocaleString('id-ID') : 'Rp 0';
+        const preorderBadge = (res.pesanan && res.pesanan.length > 0) ? `<button class="btn-secondary" style="font-size:11px; padding:4px 8px; background:#fef3c7; color:#d97706; border:1px solid #fcd34d; border-radius: 4px; cursor: pointer; white-space: nowrap;" onclick="showPreorderMenu('${res.id}')">🛒 Lihat</button>` : '-';
+        html += `<tr>
+            <td><span style="font-size:11px; font-weight:bold; color:#1e40af;">${res.id}</span></td>
+            <td>${res.tanggal}</td>
+            <td>${res.nama}<br><span style="font-size:10px; color:#666;">${res.wa || '-'}</span></td>
+            <td>${res.jamMulai} - ${res.jamSelesai}</td>
+            <td style="text-align:center;">${res.jmlTamu}</td>
+            <td>${res.ruangan}</td>
+            <td style="text-align:center;">${preorderBadge}</td>
+            <td style="text-align:right;">${dpFormatted}</td>
+            <td>
+                <button class="btn-small-danger" style="background:#0d6efd;" onclick="printReservasiBill('${res.id}')">Print Bill</button>
+                ${window.rbmOnlyOwnerCanEditDelete && window.rbmOnlyOwnerCanEditDelete() ? `<button class="btn-small-danger" onclick="deleteReservasi('${res.id}')">Hapus</button>` : '-'}
+            </td>
+        </tr>`;
+    });
+    tbody.innerHTML = html;
+}
+
+function deleteReservasi(id) {
+    if (window.rbmOnlyOwnerCanEditDelete && !window.rbmOnlyOwnerCanEditDelete()) { alert('Hanya Owner yang dapat menghapus data.'); return; }
+    if(!confirm("Hapus data reservasi ini?")) return;
+    const storageKey = getRbmStorageKey('RBM_RESERVASI_DATA');
+    let allData = getSafeReservasiData(storageKey);
+    
+    allData = allData.filter(d => d.id !== id);
+    
+    if (window.RBMStorage && typeof window.RBMStorage.setItem === 'function') {
+        window.RBMStorage.setItem(storageKey, JSON.stringify(allData));
+    } else {
+        localStorage.setItem(storageKey, JSON.stringify(allData));
+    }
+    if (window._rbmParsedCache) {
+        window._rbmParsedCache[storageKey] = { data: allData };
+    }
+    loadReservasiData();
+    if (typeof renderReservasiCalendar === 'function') renderReservasiCalendar();
+}
+
+function printReservasiBill(id) {
+    const storageKey = getRbmStorageKey('RBM_RESERVASI_DATA');
+    let allData = getSafeReservasiData(storageKey);
+    
+    const res = allData.find(d => d.id === id);
+    if (!res) return;
+
+    const dpFormatted = res.dp ? 'Rp ' + parseInt(res.dp).toLocaleString('id-ID') : 'Rp 0';
+    
+    let displayFasilitas = res.fasilitas || '-';
+    let preorderHtml = '';
+    if (res.pesanan && res.pesanan.length > 0) {
+        if (typeof displayFasilitas === 'string') {
+            const parts = displayFasilitas.split('Catatan Tambahan:\n');
+            if (parts.length > 1) {
+                displayFasilitas = parts[1].trim();
+            } else if (displayFasilitas.includes('[PRE-ORDER MENU]')) {
+                displayFasilitas = '-';
+            }
+        }
+        
+        preorderHtml += `<br><div style="border-top: 1px dashed #000; margin: 10px 0;"></div>`;
+        preorderHtml += `<div style="font-weight:bold; text-align:center; margin-bottom: 5px;">PRE-ORDER MENU</div>`;
+        res.pesanan.forEach(item => {
+            preorderHtml += `<div class="row"><div style="flex:2;">${item.name}</div><div style="width:30px; text-align:center;">x${item.quantity}</div><div style="flex:1; text-align:right;">${(item.price * item.quantity).toLocaleString('id-ID')}</div></div>`;
+        });
+        preorderHtml += `<div style="border-top: 1px dashed #000; margin: 5px 0;"></div>`;
+        preorderHtml += `<div class="row"><div style="flex:1; font-weight:bold;">Total Pesanan</div><div style="flex:1; text-align:right; font-weight:bold;">Rp ${parseInt(res.totalPesanan || 0).toLocaleString('id-ID')}</div></div>`;
+    }
+
+    const html = `
+    <!DOCTYPE html>
+    <html><head><title>Bill Reservasi</title>
+    <style>
+        body { font-family: 'Courier New', monospace; padding: 20px; font-size: 12px; color: #000; }
+        .header { text-align: center; border-bottom: 2px dashed #000; padding-bottom: 10px; margin-bottom: 15px; }
+        .row { display: flex; margin-bottom: 5px; }
+        .label { width: 100px; font-weight: bold; }
+        .val { flex: 1; }
+        .footer { text-align: center; margin-top: 20px; border-top: 2px dashed #000; padding-top: 10px; }
+        @media print { body { padding: 0; } }
+    </style>
+    </head><body>
+        <div class="header">
+            <h2 style="margin:0;">RICE BOWL MONSTERS</h2>
+            <p style="margin:5px 0;">BUKTI RESERVASI</p>
+            <p style="margin:0; font-size:10px;">ID: ${res.id}</p>
+        </div>
+        <div class="row"><div class="label">PJ</div><div class="val">: ${res.pj || '-'}</div></div>
+        <div class="row"><div class="label">Tgl Pesan</div><div class="val">: ${new Date(res.timestamp).toLocaleDateString('id-ID')}</div></div>
+        <br>
+        <div class="row"><div class="label">Nama</div><div class="val">: ${res.nama}</div></div>
+        <div class="row"><div class="label">No WA</div><div class="val">: ${res.wa || '-'}</div></div>
+        <div class="row"><div class="label">Tgl Acara</div><div class="val">: ${res.tanggal}</div></div>
+        <div class="row"><div class="label">Waktu</div><div class="val">: ${res.jamMulai} s/d ${res.jamSelesai}</div></div>
+        <div class="row"><div class="label">Jml Tamu</div><div class="val">: ${res.jmlTamu} Orang</div></div>
+        <div class="row"><div class="label">Ruangan</div><div class="val">: ${res.ruangan}</div></div>
+        <div class="row"><div class="label">Meja</div><div class="val">: ${res.meja || '-'}</div></div>
+        <div class="row"><div class="label">Fasilitas</div><div class="val" style="white-space: pre-wrap;">:<br>${displayFasilitas}</div></div>
+        ${preorderHtml}
+        <br>
+        <div class="row" style="font-size:14px; font-weight:bold;">
+            <div class="label">DP MASUK</div>
+            <div class="val">: ${dpFormatted}</div>
+        </div>
+        <div class="footer">
+            <p>Terima Kasih atas Reservasi Anda</p>
+            <p style="font-size:10px;">Harap simpan bukti ini</p>
+        </div>
+    </body></html>`;
+    
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.srcdoc = html;
+    document.body.appendChild(iframe);
+
+    setTimeout(() => {
+        try {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+        } catch (e) {
+            console.warn('Gagal memanggil print:', e);
+        }
+        setTimeout(() => { 
+            try { document.body.removeChild(iframe); } catch(e) {} 
+        }, 1000);
+    }, 1000);
+}
+
+let calCurrentDate = new Date();
+
+function renderReservasiCalendar() {
+    const grid = document.getElementById('calendar_grid');
+    const monthYear = document.getElementById('cal_month_year');
+    if (!grid || !monthYear) return;
+
+    const year = calCurrentDate.getFullYear();
+    const month = calCurrentDate.getMonth();
+    
+    const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+    monthYear.innerText = `${monthNames[month]} ${year}`;
+
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const daysInMonth = lastDay.getDate();
+    const startDayOfWeek = firstDay.getDay();
+
+    let html = '';
+    const days = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+    days.forEach(d => html += `<div class="calendar-day-header">${d}</div>`);
+
+    for (let i = 0; i < startDayOfWeek; i++) {
+        html += `<div class="calendar-day other-month"></div>`;
+    }
+
+    const storageKey = getRbmStorageKey('RBM_RESERVASI_DATA');
+    let reservasiData = getSafeReservasiData(storageKey);
+
+    for (let i = 1; i <= daysInMonth; i++) {
+        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+        
+        const now = new Date();
+        const todayStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+        const isToday = (dateStr === todayStr);
+        
+        const events = reservasiData.filter(r => r && r.tanggal === dateStr);
+        
+        let eventsHtml = '';
+        events.forEach(ev => {
+            let colorClass = 'indoor';
+            if (ev.ruangan && ev.ruangan.toLowerCase().includes('outdoor')) colorClass = 'outdoor';
+            else if (ev.ruangan && ev.ruangan.toLowerCase().includes('vip')) colorClass = 'vip';
+            else if (ev.ruangan && ev.ruangan.toLowerCase().includes('meeting')) colorClass = 'meeting';
+            
+            eventsHtml += `<div class="cal-event ${colorClass}" title="${ev.nama} (${ev.jamMulai}-${ev.jamSelesai}) - ${ev.ruangan}">${ev.jamMulai} ${ev.nama}</div>`;
+        });
+
+        html += `<div class="calendar-day ${isToday ? 'today' : ''}" onclick="selectCalendarDate('${dateStr}')">
+            <div class="calendar-day-number">${i}</div>
+            ${eventsHtml}
+        </div>`;
+    }
+
+    grid.innerHTML = html;
+}
+
+function changeCalendarMonth(offset) {
+    calCurrentDate.setMonth(calCurrentDate.getMonth() + offset);
+    renderReservasiCalendar();
+}
+
+function selectCalendarDate(dateStr) {
+    var el = document.getElementById("res_tanggal");
+    if (el) el.value = dateStr;
+    showView('input-reservasi-view');
+    if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.focus();
+    }
+}
+
+// Inisialisasi data saat halaman dimuat (Sync Firebase)
+window.addEventListener('load', function() {
+    function initReservasi() {
+        loadReservasiData();
+        if (typeof renderReservasiCalendar === 'function') renderReservasiCalendar();
+    }
+    
+    initReservasi(); // Load cepat dari cache lokal
+    
+    if (window.RBMStorage && typeof window.RBMStorage.ready === 'function') {
+        window.RBMStorage.ready().then(initReservasi).catch(initReservasi);
+    }
+});
+
+// ================= PENGATURAN RESERVASI (MODAL) =================
+function openResSettingsModal() {
+    const outletId = document.getElementById('rbm-outlet-select').value;
+    if(!outletId) return alert('Pilih outlet terlebih dahulu!');
+    
+    document.getElementById('resSettingsModal').style.display = 'flex';
+    document.getElementById('res_set_tnc').value = 'Memuat data...';
+    
+    firebase.database().ref('customer_app_settings/reservasi/' + outletId).once('value', snap => {
+        const data = snap.val() || {};
+        document.getElementById('res_set_tnc').value = data.syaratKetentuan || '';
+        document.getElementById('res_set_ppn').value = data.ppn || 0;
+        document.getElementById('res_set_dp_percent').value = data.dpPercent || 0;
+        document.getElementById('res_set_bank_name').value = data.bankInfo?.bank || '';
+        document.getElementById('res_set_bank_rek').value = data.bankInfo?.noRek || '';
+        document.getElementById('res_set_bank_an').value = data.bankInfo?.aName || '';
+        
+        renderResSettingItems('ruangan-list', data.ruangan || [{nama:'', foto:''}]);
+        renderResSettingItems('meja-list', data.penataanMeja || [{nama:'', foto:''}]);
+    });
+}
+
+function closeResSettingsModal() { document.getElementById('resSettingsModal').style.display = 'none'; }
+
+function renderResSettingItems(containerId, items) {
+    const container = document.getElementById(containerId);
+    container.innerHTML = '';
+    if(items.length === 0) addResSettingItemRow(containerId);
+    else items.forEach(item => addResSettingItemRow(containerId, item.nama, item.foto));
+}
+
+function addResSettingItemRow(containerId, nama = '', foto = '') {
+    const container = document.getElementById(containerId);
+    const div = document.createElement('div');
+    div.style.display = 'flex'; div.style.gap = '8px'; div.style.marginBottom = '8px';
+    div.innerHTML = `
+        <input type="text" class="item-nama" placeholder="Nama (Misal: VIP)" value="${nama}" style="flex:1; padding:8px; border:1px solid #ccc; border-radius:4px; font-size:12px;">
+        <input type="text" class="item-foto" placeholder="URL Foto Gambar" value="${foto}" style="flex:2; padding:8px; border:1px solid #ccc; border-radius:4px; font-size:12px;">
+        <button class="btn-small-danger" onclick="this.parentElement.remove()" style="background:#dc2626; border-radius:4px;">x</button>
+    `;
+    container.appendChild(div);
+}
+
+function saveResSettings() {
+    const outletId = document.getElementById('rbm-outlet-select').value;
+    const btn = document.getElementById('btnSaveResSettings');
+    btn.textContent = 'Menyimpan...'; btn.disabled = true;
+    
+    const extractItems = (id) => Array.from(document.getElementById(id).children).map(row => ({
+        nama: row.querySelector('.item-nama').value, foto: row.querySelector('.item-foto').value
+    })).filter(i => i.nama);
+
+    const data = {
+        syaratKetentuan: document.getElementById('res_set_tnc').value,
+        ppn: parseFloat(document.getElementById('res_set_ppn').value) || 0,
+        dpPercent: parseFloat(document.getElementById('res_set_dp_percent').value) || 0,
+        bankInfo: { bank: document.getElementById('res_set_bank_name').value, noRek: document.getElementById('res_set_bank_rek').value, aName: document.getElementById('res_set_bank_an').value },
+        ruangan: extractItems('ruangan-list'),
+        penataanMeja: extractItems('meja-list')
+    };
+
+    firebase.database().ref('customer_app_settings/reservasi/' + outletId).set(data)
+        .then(() => { alert('✅ Pengaturan reservasi berhasil disimpan!'); closeResSettingsModal(); })
+        .catch(e => alert('❌ Gagal menyimpan: ' + e.message))
+        .finally(() => { btn.textContent = 'Simpan Pengaturan'; btn.disabled = false; });
+}
+
+// ================= TAMPILKAN POPUP PREORDER =================
+function showPreorderMenu(id) {
+    const storageKey = getRbmStorageKey('RBM_RESERVASI_DATA');
+    let allData = getSafeReservasiData(storageKey);
+    const res = allData.find(d => d.id === id);
+    if (!res || !res.pesanan || res.pesanan.length === 0) return;
+
+    let html = '<table style="width:100%; border-collapse: collapse; margin-bottom: 10px;">';
+    html += '<tr style="border-bottom: 1px solid #eee;"><th style="text-align:left; padding:6px 0;">Menu</th><th style="text-align:center; padding:6px 0;">Qty</th><th style="text-align:right; padding:6px 0;">Harga</th></tr>';
+    
+    let subtotal = 0;
+    res.pesanan.forEach(item => {
+        const total = item.price * item.quantity;
+        subtotal += total;
+        html += `<tr style="border-bottom: 1px solid #f9fafb;"><td style="padding: 6px 0;">${item.name}</td><td style="padding: 6px 0; text-align:center;">x${item.quantity}</td><td style="padding: 6px 0; text-align:right;">Rp ${total.toLocaleString('id-ID')}</td></tr>`;
+    });
+    html += '</table>';
+    
+    const grandTotal = res.totalPesanan || subtotal;
+    
+    html += `<div style="text-align:right; font-weight:bold; margin-top: 10px;">Subtotal: Rp ${subtotal.toLocaleString('id-ID')}</div>`;
+    if (grandTotal > subtotal) html += `<div style="text-align:right; font-weight:bold; color:#dc2626;">PPN: Rp ${(grandTotal - subtotal).toLocaleString('id-ID')}</div>`;
+    html += `<div style="text-align:right; font-weight:bold; font-size: 16px; color:#10b981; margin-top: 5px;">Total: Rp ${parseInt(grandTotal).toLocaleString('id-ID')}</div>`;
+
+    document.getElementById('preorderModalBody').innerHTML = html;
+    document.getElementById('preorderModal').style.display = 'flex';
+}
+
+function closePreorderModal() { document.getElementById('preorderModal').style.display = 'none'; }
+</script>
 </body>
 </html>

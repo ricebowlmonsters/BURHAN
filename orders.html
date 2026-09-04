@@ -108,7 +108,32 @@
             color: var(--primary, #4C2A85);
             border-color: var(--primary, #4C2A85);
         }
+
+        /* [BARU] Mode Cetak Khusus Tablet Android & Aplikasi Pihak ke-3 */
+        @media print {
+            body > *:not(#print-receipt-container) {
+                display: none !important;
+            }
+            #print-receipt-container {
+                display: block !important;
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                margin: 0;
+                padding: 0;
+                background: white;
+            }
+        }
     </style>
+    <script>
+        // Otomatis sembunyikan header ganda saat dibuka dari server.
+        if (window.self !== window.top) {
+            document.addEventListener('DOMContentLoaded', function() {
+                document.body.classList.add('in-iframe');
+            });
+        }
+    </script>
 </head>
 <body>
     <div class="app-container">
@@ -242,6 +267,7 @@
                     if (activeOutlets.length === 0) {
                         activeOutlets = JSON.parse(localStorage.getItem('rbm_outlets') || '[]');
                     }
+                    if (activeOutlets.length === 0) activeOutlets = ['sidoarjo', 'surabaya']; // Fallback
                     displayOutlets = activeOutlets;
                 }
 
@@ -251,6 +277,8 @@
                 }
                 outletSelectorDiv.innerHTML = '';
                 displayOutlets.forEach(outlet => {
+                    if (typeof outlet !== 'string') outlet = String(outlet.id || outlet);
+                    if (!outlet) return;
                     const btn = document.createElement('button');
                     btn.className = 'outlet-btn';
                     btn.dataset.outlet = outlet;
@@ -262,18 +290,11 @@
                 outletButtons = document.querySelectorAll('.outlet-btn');
                 addEventListenersToOutletButtons();
 
-                // [BARU] Jika mode offline, sembunyikan selector dan paksa pilih yang pertama
-                if (isRbmOfflineMode()) {
-                    outletSelectorDiv.style.display = 'none';
-                    if (outletButtons.length > 0) outletButtons[0].click();
-                    return;
-                }
-
                 // [BARU] LOGIKA OTOMATIS:
-                // Jika hanya ada 1 outlet, langsung pilih dan sembunyikan tombolnya.
+                // Jika hanya ada 1 outlet, langsung pilih (tapi jangan disembunyikan).
                 if (displayOutlets.length === 1) {
                     outletButtons[0].click();
-                    outletSelectorDiv.style.display = 'none'; // Sembunyikan agar tidak perlu dipilih manual
+                    outletSelectorDiv.style.display = 'flex'; // Tetap tampilkan
                 } else {
                     // Jika lebih dari 1, pilih yang terakhir kali dibuka
                     const lastOutlet = localStorage.getItem(LAST_OUTLET_KEY);
@@ -313,6 +334,7 @@
 
                 currentOutletId = outletId;
                 ordersRef = database.ref(`orders/${outletId}`);
+                var recentOrdersQuery = ordersRef.orderByChild('date').limitToLast(100); // [OPTIMASI] Batasi data historis
                 
                 // Kosongkan daftar pesanan dan tampilkan placeholder
                 orderListEl.innerHTML = '';
@@ -634,7 +656,9 @@
             }
 
             // [BARU] Konfigurasi Print Bridge (jika digunakan)
-            const PRINT_BRIDGE_URL = 'http://localhost:3000'; // URL print bridge server
+            // GANTI 'localhost' DENGAN IP KOMPUTER WINDOWS YANG MENJALANKAN PRINT BRIDGE
+            // Contoh: 'http://192.168.1.15:3000'
+            const PRINT_BRIDGE_URL = 'http://localhost:3000';
             const USE_PRINT_BRIDGE = true; // Set false untuk gunakan browser print biasa
 
             // [BARU] Fungsi untuk print via Print Bridge (opsional: kirim printerIP dari Kelompok Printer)
@@ -697,37 +721,22 @@
 
             // [BARU] Fungsi untuk mencetak via browser (dipisahkan agar bisa dipanggil berulang)
             function fallbackBrowserPrint(html, orderId) {
-                const iframe = document.createElement('iframe');
-                iframe.style.position = 'fixed';
-                iframe.style.right = '0';
-                iframe.style.bottom = '0';
-                iframe.style.width = '0';
-                iframe.style.height = '0';
-                iframe.style.border = '0';
-                document.body.appendChild(iframe);
-                const doc = iframe.contentWindow.document;
-                doc.open();
-                doc.write(html);
-                doc.close();
-                iframe.onload = () => {
-                    setTimeout(() => {
-                        const iw = iframe.contentWindow;
-                        if (iw) {
-                            const cleanup = () => {
-                                updatePrintedFlag(orderId);
-                                try { iframe.remove(); } catch (e) {}
-                                try { window.focus(); } catch (e) {}
-                            };
-                            iw.onafterprint = cleanup;
-                            setTimeout(cleanup, 4000); // Jaring pengaman jika onafterprint tidak jalan
-                            try { iw.focus(); } catch (e) {}
-                            iw.print();
-                        } else {
-                            window.print(); // Fallback paling akhir
-                            setTimeout(() => { try { iframe.remove(); } catch (e) {} }, 1000);
-                                }
-                    }, 50); // Jeda singkat agar iframe siap
+                let container = document.getElementById('print-receipt-container');
+                if (!container) {
+                    container = document.createElement('div');
+                    container.id = 'print-receipt-container';
+                    document.body.appendChild(container);
                 }
+                
+                container.innerHTML = html;
+
+                setTimeout(() => {
+                    window.print();
+                    updatePrintedFlag(orderId);
+                    setTimeout(() => {
+                        container.innerHTML = '';
+                    }, 1000);
+                }, 300);
             }
 
             window.manualPrint = function(orderId) {
@@ -743,8 +752,10 @@
                     } else {
                         CustomUI.alert('Order ini sudah dicetak');
                     }
+                }).catch(err => {
+                    console.error("Gagal manual print:", err);
                 });
-            }
+            };
 
             // [BARU] Fungsi untuk update flag 'printed' di Firebase
             function updatePrintedFlag(orderId) {
@@ -754,7 +765,7 @@
                         updates[`/orders/${currentOutletId}/${orderId}/printed`] = true;
                         database.ref().update(updates);
                     }
-                } catch (e) { console.warn('Gagal update printed flag:', e); }
+                } catch (e) { console.warn('Gagal update flag printed:', e); }
             }
             // [BARU] Fungsi untuk mengkategorikan item
             function getItemCategory(itemName) {
@@ -770,8 +781,8 @@
             }
 
             // [BARU] Fungsi untuk mengekstrak kategori dari HTML struk yang sudah dibuat
-            function getCategoryFromHtml(html) {
-                const match = html.match(/--- (MAKANAN|MINUMAN|CHECKER) ---/);
+            function getCategoryFromHtml(htmlStr) {
+                const match = htmlStr.match(/--- (MAKANAN|MINUMAN|CHECKER) ---/);
                 if (match && match[1]) {
                     return match[1];
                 }
@@ -801,38 +812,33 @@
 
                 // [BARU] Buat bagian footer yang berisi harga, hanya jika BUKAN struk dapur
                 const priceFooter = isKitchenReceipt ? '' : `
-                    <div class="row"><span>Pembayaran</span><span>${method}</span></div>
-                    <div class="line"></div>
+                    <div style="display:flex; justify-content:space-between; font-size:10px;"><span>Pembayaran</span><span>${method}</span></div>
+                    <div style="border-top:2px dashed #000; margin:6px 0;"></div>
                     <div style="font-size:12px;">${itemsHtml || '-'}</div>
-                    <div class="line"></div>
-                    <div class="row" style="font-size:14px;"><strong>Total</strong><strong>Rp ${total}</strong></div>
-                    <div style="margin-top:8px;" class="center muted">Terima kasih</div>`;
+                    <div style="border-top:2px dashed #000; margin:6px 0;"></div>
+                    <div style="display:flex; justify-content:space-between; font-size:14px;"><strong>Total</strong><strong>Rp ${total}</strong></div>
+                    <div style="margin-top:8px; text-align:center; opacity:0.9; font-weight:bold;">${footerHtml}</div>`;
 
                 // Template thermal 80mm sederhana
-                return `<!DOCTYPE html>
-                <html><head><meta charset="utf-8">
-                <style>
-                    @page { size: 80mm 297mm; margin: 0; padding: 0; }
-                    body { font-family: 'Courier New', monospace; width: 76mm; margin: 0; padding: 2mm; font-size: 10px; line-height: 1.2; white-space: pre-wrap; }
-                    .center { text-align:center; }
-                    .line { border-top:1px dashed #000; margin:6px 0; }
-                    .muted { opacity:.9; font-size:9px; }
-                    .row { display:flex; justify-content:space-between; font-size:10px; }
-                </style></head>
-                <body>
-                    <div class="center"><strong>RICE BOWL MONSTER</strong></div>
-                    <div class="center muted">${store}</div>
-                    <div class="center muted">${time}</div>
-                    <div class="line"></div>
-                    <div class="row"><span>Tipe</span><span>${orderType}</span></div>`
+                return `
+                    <div style="text-align:center;"><strong>RICE BOWL MONSTER</strong></div>
+                    <div style="text-align:center; opacity:0.9;">${store}</div>
+                    <div style="text-align:center; opacity:0.9;">${time}</div>
+                    <div style="border-top:2px dashed #000; margin:6px 0;"></div>
+                    <div style="display:flex; justify-content:space-between;"><span>Tipe</span><span>${orderType}</span></div>`
                     // [DIUBAH] Jika struk dapur, hanya tampilkan item. Jika tidak, tampilkan footer harga.
-                    + (isKitchenReceipt ? `<div class="line"></div><div style="font-size:10px;">${itemsHtml || '-'}</div>` : priceFooter)
-                    + `
-                </body></html>`;
+                    + (isKitchenReceipt ? '<div class="line"></div><div style="font-size:10px;">' + (itemsHtml || '-') + '</div>' : priceFooter)
+                    + ` 
+                </div>`;
             }
 
             // [BARU] Fungsi untuk membuat struk lengkap untuk kasir
             function buildCashierReceiptHtml(order) {
+                const outletsData = JSON.parse(localStorage.getItem('rbm_outlets_data') || '[]');
+                const currentOutletData = outletsData.find(o => o.id === currentOutletId) || {};
+                const footerText = currentOutletData.receiptFooter || 'Terima Kasih\nSilakan Datang Kembali!';
+                const footerHtml = footerText.replace(/\n/g, '<br>');
+
                 const store = (currentOutletId || '').toUpperCase();
                 const time = new Date(order.date).toLocaleString('id-ID');
                 const method = order.payment?.method || 'N/A';
@@ -846,31 +852,21 @@
                     itemsHtml += `<div>${it.name} x${it.quantity}${note}</div>`;
                 });
 
-                // Template ini mirip dengan yang lain, tapi headernya "KASIR" dan itemnya lengkap
-                return `<!DOCTYPE html>
-                <html><head><meta charset="utf-8">
-                <style>
-                    @page { size: 80mm 297mm; margin: 0; padding: 0; }
-                    body { font-family: 'Courier New', monospace; width: 76mm; margin: 0; padding: 2mm; font-size: 10px; line-height: 1.2; white-space: pre-wrap; }
-                    .center { text-align:center; }
-                    .line { border-top:1px dashed #000; margin:6px 0; }
-                    .muted { opacity:.9; font-size:9px; }
-                    .row { display:flex; justify-content:space-between; font-size:10px; }
-                </style></head>
-                <body>
-                    <div class="center"><strong>RICE BOWL MONSTER</strong></div>
-                    <div class="center muted">${store}</div>
-                    <div class="center muted">${time}</div>
-                    <div class="line"></div>
-                    <div class="center" style="margin-bottom: 5px; font-size:10px;">--- KASIR ---</div>
-                    <div class="row"><span>Tipe</span><span>${orderType}</span></div>
-                    <div class="row"><span>Pembayaran</span><span>${method}</span></div>
-                    <div class="line"></div>
+                return `
+                <div style="font-family: 'Courier New', Courier, monospace; width: 76mm; margin: 0 auto; padding: 0 2mm 2mm 2mm; font-size: 14px; font-weight: bold; line-height: 1.2; color: #000; white-space: pre-wrap;">
+                    <div style="text-align:center;"><strong>RICE BOWL MONSTER</strong></div>
+                    <div style="text-align:center; opacity:0.9;">${store}</div>
+                    <div style="text-align:center; opacity:0.9;">${time}</div>
+                    <div style="border-top:2px dashed #000; margin:6px 0;"></div>
+                    <div style="text-align:center; margin-bottom: 5px; font-size:10px;">--- KASIR ---</div>
+                    <div style="display:flex; justify-content:space-between; font-size:10px;"><span>Tipe</span><span>${orderType}</span></div>
+                    <div style="display:flex; justify-content:space-between; font-size:10px;"><span>Pembayaran</span><span>${method}</span></div>
+                    <div style="border-top:2px dashed #000; margin:6px 0;"></div>
                     <div style="font-size:10px;">${itemsHtml || '-'}</div>
-                    <div class="line"></div>
-                    <div class="row" style="font-size:12px;"><strong>Total</strong><strong>Rp ${total}</strong></div>
-                    <div style="margin-top:8px;" class="center muted">Terima kasih</div>
-                </body></html>`;
+                    <div style="border-top:2px dashed #000; margin:6px 0;"></div>
+                    <div style="display:flex; justify-content:space-between; font-size:12px;"><strong>Total</strong><strong>Rp ${total}</strong></div>
+                    <div style="margin-top:8px; text-align:center; opacity:0.9; font-weight:bold;">${footerHtml}</div>
+                </div>`;
             }
 
             function formatPrice(price) {
@@ -880,6 +876,7 @@
 
             // [BARU] Fungsi helper untuk memutar suara dengan aman
             function playFallbackSound(audioEl) {
+                if (!audioEl) return;
                 // Coba set src ke file mp3 jika belum ada
                 if (!audioEl.src) audioEl.src = "notification.mp3";
                 
@@ -918,4 +915,4 @@
         });
     </script>
 </body>
-</html>
+</html>     

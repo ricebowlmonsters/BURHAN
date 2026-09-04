@@ -1,8 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <base target="_top">
   <meta charset="UTF-8">
+  <script>
+  (function(){
+    var b = document.createElement('base');
+    b.target = (location.protocol === 'file:') ? '_self' : '_top';
+    document.head.appendChild(b);
+  })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RBM Pro</title>
   <link rel="stylesheet" href="rbm-pro.css">
@@ -76,7 +82,7 @@
       <label>Detail Transaksi</label>
       <div id="detail-container-pembukuan" class="detail-wrapper"></div>
     </div>
-    <button id="submitButtonPembukuan" class="btn btn-primary" onclick="submitDataPembukuan()">Simpan Data</button>
+    <button type="button" id="submitButtonPembukuan" class="btn btn-primary" onclick="submitDataPembukuan()">Simpan Data</button>
     <p id="outputPembukuan" class="output-msg"></p>
   </div>
 </div>
@@ -98,24 +104,28 @@
       <button type="button" class="btn btn-secondary" onclick="exportPembukuanToExcel()" style="background: #198754; color: white; border-color: #198754; margin-left: 8px;">Export Excel</button>
       <input type="file" id="import_pembukuan_file" accept=".xlsx,.xls" style="display:none" onchange="processImportPembukuanExcel(this)">
       <button type="button" class="btn btn-secondary" onclick="printPembukuanReport()" style="background: #0d6efd; color: white; border-color: #0d6efd; margin-left: 8px;">Print</button>
-      <button type="button" class="btn btn-secondary" onclick="savePembukuanToJpg()" style="background: #6610f2; color: white; border-color: #6610f2; margin-left: 8px;">Save JPG (1 Hari)</button>
+      <button type="button" class="btn btn-secondary" onclick="savePembukuanToJpg()" style="background: #6610f2; color: white; border-color: #6610f2; margin-left: 8px;">Save JPG (1 Bulan)</button>
     </div>
 
     <div class="summary-grid" id="pembukuan_summary" style="display:none">
+      <div class="summary-card" style="grid-column: 1 / -1; background: linear-gradient(135deg, #059669 0%, #047857 100%); box-shadow: 0 10px 25px rgba(5, 150, 103, 0.5); border: 2px solid #34d399; position: relative; transform: translateY(-2px);">
+        <div class="label" style="color: #a7f3d0; font-size: 13px; font-weight: 800; letter-spacing: 0.5px;">💰 TOTAL PENDAPATAN (OMSET)</div>
+        <div class="value" id="pembukuan_total_pendapatan" style="color: #ffffff; font-size: 26px; font-weight: 800; text-shadow: 0 2px 4px rgba(0,0,0,0.3);">Rp 0</div>
+      </div>
       <div class="summary-card" style="background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%);">
-        <div class="label">Saldo Awal Periode</div>
+        <div class="label">Saldo Awal Periode (Cash) </div>
         <div class="value" id="pembukuan_saldo_awal">Rp 0</div>
       </div>
       <div class="summary-card">
-        <div class="label">Cash Masuk (Periode)</div>
+        <div class="label">Cash Masuk </div>
         <div class="value" id="pembukuan_total_cash">Rp 0</div>
       </div>
       <div class="summary-card">
-        <div class="label">Kas Keluar (Periode)</div>
+        <div class="label">Cash Keluar</div>
         <div class="value" id="pembukuan_total_keluar">Rp 0</div>
       </div>
       <div class="summary-card" style="background: linear-gradient(135deg, #64748b 0%, #475569 100%);">
-        <div class="label">Saldo Akhir</div>
+        <div class="label">Saldo Akhir (Cash)</div>
         <div class="value" id="pembukuan_total_fisik">Rp 0</div>
       </div>
     </div>
@@ -211,6 +221,7 @@
 <script>window.RBM_PAGE = 'lihat-pembukuan-view';</script>
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-storage.js"></script>
 <script src="rbm-pro-storage.js"></script>
 <script src="firebase-storage.js"></script>
 <script src="rbm-pro.js"></script>

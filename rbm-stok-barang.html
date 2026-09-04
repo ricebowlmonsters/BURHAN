@@ -1,8 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <base target="_top">
   <meta charset="UTF-8">
+  <script>
+  (function(){
+    var b = document.createElement('base');
+    b.target = (location.protocol === 'file:') ? '_self' : '_top';
+    document.head.appendChild(b);
+  })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RBM Pro</title>
   <link rel="stylesheet" href="rbm-pro.css">
@@ -249,7 +255,10 @@
 </div>
 <script>window.RBM_PAGE = 'stok-barang-view';</script>
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+mengapasaat saya rbm-input-barang.html itumasukke rbm-stok-barang.html tapi saat ke refres mengapa data ituhilang dan saat saya input barang untuk barang Fruits & Vegetables itudata tidakmasuk
+
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-storage.js"></script>
 <script src="rbm-pro-storage.js"></script>
 <script src="firebase-storage.js"></script>
 <script src="rbm-pro.js"></script>
